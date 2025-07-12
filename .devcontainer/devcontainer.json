@@ -1,0 +1,28 @@
+{
+  "name": "rich-nvr dev",
+  "dockerComposeFile": ["docker-compose.yml"],
+  "service": "richclient-dev-client",
+  "workspaceFolder": "/app",
+  "overrideCommand": true,
+  "remoteUser": "root",
+  "postCreateCommand": "apt-get update && apt-get install -y gdb gdbserver && rm -rf /var/lib/apt/lists/*",
+  "containerEnv": {
+    "QT_QPA_PLATFORM": "xcb",
+    "DISPLAY": "${localEnv:DISPLAY}",
+    "XDG_SESSION_TYPE": "x11",
+    "PULSE_SERVER": "unix:/mnt/wslg/PulseServer"
+  },
+  "remoteEnv": {
+    "WAYLAND_DISPLAY": "",
+    "XDG_RUNTIME_DIR": ""         // optional: blank so Wayland can’t find a runtime
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-vscode.cpptools",
+        "ms-vscode.cmake-tools",
+        "twxs.cmake"
+      ]
+    }
+  }
+}

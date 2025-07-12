@@ -1,0 +1,89 @@
+services:
+  richserver:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: build
+    image: richnvr-cpp:latest
+    command: ["/app/dist/server/richserver"]
+    environment:
+      - QT_QPA_PLATFORM=offscreen
+      - LIBVA_DRIVER_NAME=d3d12   # optional
+    ports:
+      - "8554:8554"
+      - "8080:8080"
+    volumes:
+      - /home/rick/rich-nvr/dist/server/media:/app/dist/server/media:rw
+      - /home/rick/rich-nvr/dist/server/cameras.json:/app/dist/server/cameras.json:rw
+      - /usr/lib/wsl:/usr/lib/wsl:ro                   # optional (WSLg GPU)
+    devices:
+      - /dev/dxg                                        # optional (WSLg GPU)
+    restart: unless-stopped
+
+  richclient:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: richnvr-cpp:latest
+    command: ["/app/dist/richclient"]                  # ← correct client path
+    environment:
+      - QT_QPA_PLATFORM=wayland
+      - WAYLAND_DISPLAY=wayland-0                      # Explicit value since ${WAYLAND_DISPLAY} may not be set
+      - XDG_RUNTIME_DIR=/run/user/1000                 # Use your actual XDG_RUNTIME_DIR
+      - PULSE_SERVER=unix:/mnt/wslg/PulseServer
+      - DISPLAY=${DISPLAY:-:0}                         # X11 fallback
+    volumes:
+      - /mnt/wslg:/mnt/wslg
+      - /tmp/.X11-unix:/tmp/.X11-unix
+      - /run/user/1000:/run/user/1000                  # Mount XDG_RUNTIME_DIR for Wayland socket
+      - /usr/lib/wsl:/usr/lib/wsl:ro                   # optional (WSLg GPU)
+      - /home/rick/rich-nvr/dist/config:/app/dist/config:rw  # Mount config directory for settings
+    devices:
+      - /dev/dxg                                        # optional (WSLg GPU)
+    # depends_on:
+    #   - richserver
+    restart: unless-stopped
+
+  richclient-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+      args:
+        BUILD_TYPE: RelWithDebInfo
+        INSTALL_DEBUG_TOOLS: "1"
+    image: richnvr-cpp:latest
+    command: ["sleep", "infinity"]        # don't auto-run GUI
+    environment:
+      - QT_QPA_PLATFORM=xcb               # ⬅ force Qt to X11
+      - DISPLAY=${DISPLAY}                # ⬅ inherit WSLg's :0
+      - XDG_SESSION_TYPE=x11              # ⬅ belt-and-suspenders
+      - PULSE_SERVER=unix:/mnt/wslg/PulseServer
+      - WAYLAND_DISPLAY=
+      # (intentionally NOT passing WAYLAND_DISPLAY or XDG_RUNTIME_DIR)
+    volumes:
+      - ..:/app:cached
+      - /tmp/.X11-unix:/tmp/.X11-unix:ro  # ⬅ X11 socket from WSLg
+      - /mnt/wslg:/mnt/wslg               # ⬅ audio + mesa/d3d12 helpers
+      - /usr/lib/wsl:/usr/lib/wsl:ro      # ⬅ D3D12/dxcore shims (GPU accel)
+      - /home/rick/rich-nvr/dist/server/media:/app/dist/server/media:rw
+      #- /home/rick/rich-nvr/dist/server/cameras.json:/app/dist/server/cameras.json:rw
+    devices:
+      - /dev/dxg                          # optional GPU via WSLg
+    depends_on:
+      - richserver
+
+    # depends_on:
+    #   - richserver
+# docker compose build
+# docker compose build richclient
+# docker compose build richserver
+# or full: docker compose build --no-cache
+# docker compose up -d richserver
+# docker compose up -d richclient
+# docker compose run richserver /bin/bash   # for interactive shell
+
+# docker compose build --no-cache \
+#   --build-arg BUILD_TYPE=Debug \
+#   --build-arg INSTALL_DEBUG_TOOLS=1
