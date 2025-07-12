@@ -1,0 +1,25 @@
+services:
+  richclient-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: richnvr-cpp:latest
+    command: ["/app/dist/richclient"]                  # ← correct client path
+    environment:
+      - QT_QPA_PLATFORM=wayland
+      - WAYLAND_DISPLAY=wayland-0                      # Explicit value since ${WAYLAND_DISPLAY} may not be set
+      - XDG_RUNTIME_DIR=/run/user/1000                 # Use your actual XDG_RUNTIME_DIR
+      - PULSE_SERVER=unix:/mnt/wslg/PulseServer
+      - DISPLAY=${DISPLAY:-:0}                         # X11 fallback
+    volumes:
+      - /mnt/wslg:/mnt/wslg
+      - /tmp/.X11-unix:/tmp/.X11-unix
+      - /run/user/1000:/run/user/1000                  # Mount XDG_RUNTIME_DIR for Wayland socket
+      - /usr/lib/wsl:/usr/lib/wsl:ro                   # optional (WSLg GPU)
+      - /home/rick/rich-nvr/dist/config:/app/dist/config:rw  # Mount config directory for settings
+    devices:
+      - /dev/dxg                                        # optional (WSLg GPU)
+    # depends_on:
+    #   - richserver
+    restart: unless-stopped

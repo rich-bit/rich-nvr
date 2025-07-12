@@ -1,0 +1,9 @@
+build/
+dist/
+*.o
+*.so
+*.a
+*.swp
+.vscode/
+.idea/
+*.user
