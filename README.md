@@ -32,7 +32,7 @@ Built with fantastic open-source software: **GStreamer**, **LIVE555**, **OpenCV*
 ### Server, using Live555 to create a proxied stream for clients to preview:
 ```text
 ### Using LIVE555 to create a proxied stream for clients to preview
-```text
+
 (LAN/VLAN)
 Camera A ─┐
 Camera B ─┼──▶ LIVE555 Proxy @ rtsp://richnvr:8554 ──▶ Clients (VLC, ffplay, NVR)
