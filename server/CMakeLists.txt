@@ -7,57 +7,65 @@ find_package(OpenCV REQUIRED COMPONENTS core imgproc video imgcodecs)
 find_package(Qt6 REQUIRED COMPONENTS Core)
 
 if(DEFINED LIVE555_DIR)
+  # Use custom LIVE555 build
+  message(STATUS "Using custom LIVE555 from: ${LIVE555_DIR}")
+  
+  set(LIVE555_LIVEMEDIA_INCLUDE ${LIVE555_DIR}/liveMedia/include)
+  set(LIVE555_GROUPSOCK_INCLUDE ${LIVE555_DIR}/groupsock/include)
+  set(LIVE555_USAGEENV_INCLUDE ${LIVE555_DIR}/UsageEnvironment/include)
+  set(LIVE555_BASICENV_INCLUDE ${LIVE555_DIR}/BasicUsageEnvironment/include)
+  
+  set(LIVE555_LIVEMEDIA_LIB ${LIVE555_DIR}/liveMedia/libliveMedia.a)
+  set(LIVE555_GROUPSOCK_LIB ${LIVE555_DIR}/groupsock/libgroupsock.a)
+  set(LIVE555_USAGEENV_LIB ${LIVE555_DIR}/UsageEnvironment/libUsageEnvironment.a)
+  set(LIVE555_BASICUSAGEENV_LIB ${LIVE555_DIR}/BasicUsageEnvironment/libBasicUsageEnvironment.a)
+  
+  # Verify custom build files exist
+  if(NOT EXISTS ${LIVE555_LIVEMEDIA_LIB})
+    message(FATAL_ERROR "Custom LIVE555 library not found: ${LIVE555_LIVEMEDIA_LIB}\nBuild LIVE555 first with 'make' in ${LIVE555_DIR}")
+  endif()
+  
+  message(STATUS "  liveMedia: ${LIVE555_LIVEMEDIA_LIB}")
+  message(STATUS "  groupsock: ${LIVE555_GROUPSOCK_LIB}")
+  message(STATUS "  UsageEnvironment: ${LIVE555_USAGEENV_LIB}")
+  message(STATUS "  BasicUsageEnvironment: ${LIVE555_BASICUSAGEENV_LIB}")
+else()
+  # Use system LIVE555
+  message(STATUS "Using system LIVE555")
+  
   list(APPEND LIVE555_HINTS
-    ${LIVE555_DIR}
-    ${LIVE555_DIR}/liveMedia
-    ${LIVE555_DIR}/groupsock
-    ${LIVE555_DIR}/UsageEnvironment
-    ${LIVE555_DIR}/BasicUsageEnvironment)
-endif()
+    /usr/local /usr/local/include /usr/local/lib
+    /usr /usr/include /usr/lib)
 
-if(DEFINED LIVE555_DIR)
-  list(APPEND LIVE555_HINTS
-    ${LIVE555_DIR}
-    ${LIVE555_DIR}/include
-    ${LIVE555_DIR}/lib
-    ${LIVE555_DIR}/liveMedia
-    ${LIVE555_DIR}/groupsock
-    ${LIVE555_DIR}/UsageEnvironment
-    ${LIVE555_DIR}/BasicUsageEnvironment)
-endif()
+  # Headers
+  find_path(LIVE555_LIVEMEDIA_INCLUDE  liveMedia.hh
+    HINTS ${LIVE555_HINTS}
+    PATH_SUFFIXES liveMedia)
+  find_path(LIVE555_GROUPSOCK_INCLUDE  GroupsockHelper.hh
+    HINTS ${LIVE555_HINTS}
+    PATH_SUFFIXES groupsock)
+  find_path(LIVE555_USAGEENV_INCLUDE   UsageEnvironment.hh
+    HINTS ${LIVE555_HINTS}
+    PATH_SUFFIXES UsageEnvironment)
+  find_path(LIVE555_BASICENV_INCLUDE   BasicUsageEnvironment.hh
+    HINTS ${LIVE555_HINTS}
+    PATH_SUFFIXES BasicUsageEnvironment)
 
-list(APPEND LIVE555_HINTS
-  /usr/local /usr/local/include /usr/local/lib
-  /usr /usr/include /usr/lib)
+  # Libs
+  find_library(LIVE555_LIVEMEDIA_LIB         liveMedia        HINTS ${LIVE555_HINTS})
+  find_library(LIVE555_GROUPSOCK_LIB         groupsock        HINTS ${LIVE555_HINTS})
+  find_library(LIVE555_USAGEENV_LIB          UsageEnvironment HINTS ${LIVE555_HINTS})
+  find_library(LIVE555_BASICUSAGEENV_LIB     BasicUsageEnvironment HINTS ${LIVE555_HINTS})
 
-# Headers
-find_path(LIVE555_LIVEMEDIA_INCLUDE  liveMedia.hh
-  HINTS ${LIVE555_HINTS}
-  PATH_SUFFIXES liveMedia)
-find_path(LIVE555_GROUPSOCK_INCLUDE  GroupsockHelper.hh
-  HINTS ${LIVE555_HINTS}
-  PATH_SUFFIXES groupsock)
-find_path(LIVE555_USAGEENV_INCLUDE   UsageEnvironment.hh
-  HINTS ${LIVE555_HINTS}
-  PATH_SUFFIXES UsageEnvironment)
-find_path(LIVE555_BASICENV_INCLUDE   BasicUsageEnvironment.hh
-  HINTS ${LIVE555_HINTS}
-  PATH_SUFFIXES BasicUsageEnvironment)
-
-# Libs
-find_library(LIVE555_LIVEMEDIA_LIB         liveMedia        HINTS ${LIVE555_HINTS})
-find_library(LIVE555_GROUPSOCK_LIB         groupsock        HINTS ${LIVE555_HINTS})
-find_library(LIVE555_USAGEENV_LIB          UsageEnvironment HINTS ${LIVE555_HINTS})
-find_library(LIVE555_BASICUSAGEENV_LIB     BasicUsageEnvironment HINTS ${LIVE555_HINTS})
-
-# Fail clearly if not found
-if(NOT LIVE555_LIVEMEDIA_INCLUDE OR NOT LIVE555_BASICENV_INCLUDE OR
-   NOT LIVE555_GROUPSOCK_INCLUDE OR NOT LIVE555_USAGEENV_INCLUDE)
-  message(FATAL_ERROR "Live555 headers not found. Install 'liblivemedia-dev' or pass -DLIVE555_DIR=/path/to/live.")
-endif()
-if(NOT LIVE555_LIVEMEDIA_LIB OR NOT LIVE555_GROUPSOCK_LIB OR
-   NOT LIVE555_USAGEENV_LIB OR NOT LIVE555_BASICUSAGEENV_LIB)
-  message(FATAL_ERROR "Live555 libraries not found. Install 'liblivemedia-dev' or pass -DLIVE555_DIR=/path/to/live.")
+  # Fail clearly if not found
+  if(NOT LIVE555_LIVEMEDIA_INCLUDE OR NOT LIVE555_BASICENV_INCLUDE OR
+     NOT LIVE555_GROUPSOCK_INCLUDE OR NOT LIVE555_USAGEENV_INCLUDE)
+    message(FATAL_ERROR "Live555 headers not found. Install 'liblivemedia-dev' or pass -DLIVE555_DIR=/path/to/live.")
+  endif()
+  if(NOT LIVE555_LIVEMEDIA_LIB OR NOT LIVE555_GROUPSOCK_LIB OR
+     NOT LIVE555_USAGEENV_LIB OR NOT LIVE555_BASICUSAGEENV_LIB)
+    message(FATAL_ERROR "Live555 libraries not found. Install 'liblivemedia-dev' or pass -DLIVE555_DIR=/path/to/live.")
+  endif()
 endif()
 
 include_directories(${CMAKE_SOURCE_DIR}/core

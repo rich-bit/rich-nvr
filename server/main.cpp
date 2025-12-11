@@ -300,9 +300,11 @@ int main() {
                if (value == "on") {
                  cam->enableMotionFrameSaving(
                      "motion"); // or provide file/path if needed
+                 manager.saveSingleCameraToJSON(manager.config_path_, name);
                  res.set_content("Motion recording ON\n", "text/plain");
                } else if (value == "off") {
                  cam->disableMotionFrameSaving();
+                 manager.saveSingleCameraToJSON(manager.config_path_, name);
                  res.set_content("Motion recording OFF\n", "text/plain");
                } else {
                  res.status = 400;
@@ -321,6 +323,7 @@ int main() {
              auto file = req.get_param_value("file");
              if (auto cam = manager.getCamera(name)) {
                cam->enableFullRecording(file);
+               manager.saveSingleCameraToJSON(manager.config_path_, name);
                res.set_content("Full recording ON\n", "text/plain");
              } else {
                res.status = 404;
@@ -332,6 +335,7 @@ int main() {
              auto name = req.get_param_value("name");
              if (auto cam = manager.getCamera(name)) {
                cam->disableFullRecording();
+               manager.saveSingleCameraToJSON(manager.config_path_, name);
                res.set_content("Full recording OFF\n", "text/plain");
              } else {
                res.status = 404;
@@ -416,6 +420,7 @@ int main() {
                int regionId = manager.addMotionRegionToCamera(name, region, angle);
                
                if (regionId != -1) {
+                 manager.saveSingleCameraToJSON(manager.config_path_, name);
                  json response;
                  response["success"] = true;
                  response["region_id"] = regionId;
@@ -449,6 +454,7 @@ int main() {
                bool success = manager.removeMotionRegionFromCamera(name, regionId);
                
                if (success) {
+                 manager.saveSingleCameraToJSON(manager.config_path_, name);
                  json response;
                  response["success"] = true;
                  response["message"] = "Motion region removed successfully";
@@ -475,9 +481,195 @@ int main() {
              }
              
              manager.clearMotionRegionsFromCamera(name);
+             manager.saveSingleCameraToJSON(manager.config_path_, name);
              json response;
              response["success"] = true;
              response["message"] = "All motion regions cleared successfully";
+             res.set_content(response.dump(), "application/json");
+           });
+
+  // Get all motion regions from camera
+  svr.Get("/get_motion_regions",
+          [&](const httplib::Request &req, httplib::Response &res) {
+            auto name = req.get_param_value("name");
+            
+            if (name.empty()) {
+              res.status = 400;
+              res.set_content("Missing required parameter: name\n", "text/plain");
+              return;
+            }
+            
+            auto regions = manager.getMotionRegionsFromCamera(name);
+            
+            json response;
+            response["success"] = true;
+            response["camera_name"] = name;
+            response["regions"] = json::array();
+            
+            for (const auto& region : regions) {
+              json region_json;
+              region_json["id"] = region.id;
+              region_json["name"] = "Region " + std::to_string(region.id);
+              region_json["x"] = region.rect.x;
+              region_json["y"] = region.rect.y;
+              region_json["w"] = region.rect.width;
+              region_json["h"] = region.rect.height;
+              region_json["angle"] = region.angle;
+              response["regions"].push_back(region_json);
+            }
+            
+            res.set_content(response.dump(), "application/json");
+          });
+
+  // Update camera properties
+  svr.Post("/update_camera_properties",
+           [&](const httplib::Request &req, httplib::Response &res) {
+             auto name = req.get_param_value("name");
+             
+             if (name.empty()) {
+               res.status = 400;
+               res.set_content("Missing required parameter: name\n", "text/plain");
+               return;
+             }
+             
+             auto cam = manager.getCamera(name);
+             if (!cam) {
+               res.status = 404;
+               res.set_content("Camera not found\n", "text/plain");
+               return;
+             }
+             
+             bool updated = false;
+             json response;
+             response["success"] = true;
+             response["camera_name"] = name;
+             response["updated_properties"] = json::array();
+             
+             // Update motion_frame_scale
+             if (req.has_param("motion_frame_scale")) {
+               try {
+                 float value = std::stof(req.get_param_value("motion_frame_scale"));
+                 cam->setMotionFrameScale(value);
+                 response["updated_properties"].push_back("motion_frame_scale");
+                 updated = true;
+               } catch (...) {
+                 response["errors"].push_back("Invalid motion_frame_scale value");
+               }
+             }
+             
+             // Update noise_threshold
+             if (req.has_param("noise_threshold")) {
+               try {
+                 float value = std::stof(req.get_param_value("noise_threshold"));
+                 cam->setNoiseThreshold(value);
+                 response["updated_properties"].push_back("noise_threshold");
+                 updated = true;
+               } catch (...) {
+                 response["errors"].push_back("Invalid noise_threshold value");
+               }
+             }
+             
+             // Update motion_threshold
+             if (req.has_param("motion_threshold")) {
+               try {
+                 float value = std::stof(req.get_param_value("motion_threshold"));
+                 cam->setMotionThreshold(value);
+                 response["updated_properties"].push_back("motion_threshold");
+                 updated = true;
+               } catch (...) {
+                 response["errors"].push_back("Invalid motion_threshold value");
+               }
+             }
+             
+             // Update motion_min_hits
+             if (req.has_param("motion_min_hits")) {
+               try {
+                 int value = std::stoi(req.get_param_value("motion_min_hits"));
+                 cam->setMotionMinHits(value);
+                 response["updated_properties"].push_back("motion_min_hits");
+                 updated = true;
+               } catch (...) {
+                 response["errors"].push_back("Invalid motion_min_hits value");
+               }
+             }
+             
+             // Update motion_decay
+             if (req.has_param("motion_decay")) {
+               try {
+                 int value = std::stoi(req.get_param_value("motion_decay"));
+                 cam->setMotionDecay(value);
+                 response["updated_properties"].push_back("motion_decay");
+                 updated = true;
+               } catch (...) {
+                 response["errors"].push_back("Invalid motion_decay value");
+               }
+             }
+             
+             // Update motion_arrow_scale
+             if (req.has_param("motion_arrow_scale")) {
+               try {
+                 float value = std::stof(req.get_param_value("motion_arrow_scale"));
+                 cam->setMotionArrowScale(value);
+                 response["updated_properties"].push_back("motion_arrow_scale");
+                 updated = true;
+               } catch (...) {
+                 response["errors"].push_back("Invalid motion_arrow_scale value");
+               }
+             }
+             
+             // Update motion_arrow_thickness
+             if (req.has_param("motion_arrow_thickness")) {
+               try {
+                 int value = std::stoi(req.get_param_value("motion_arrow_thickness"));
+                 cam->setMotionArrowThickness(value);
+                 response["updated_properties"].push_back("motion_arrow_thickness");
+                 updated = true;
+               } catch (...) {
+                 response["errors"].push_back("Invalid motion_arrow_thickness value");
+               }
+             }
+             
+             // Update motion_frame_size (width and height)
+             if (req.has_param("motion_frame_width") && req.has_param("motion_frame_height")) {
+               try {
+                 int w = std::stoi(req.get_param_value("motion_frame_width"));
+                 int h = std::stoi(req.get_param_value("motion_frame_height"));
+                 cam->setMotionFrameSize(cv::Size(w, h));
+                 response["updated_properties"].push_back("motion_frame_size");
+                 updated = true;
+               } catch (...) {
+                 response["errors"].push_back("Invalid motion_frame_size values");
+               }
+             }
+             
+             // Toggle segment recording (record on motion)
+             if (req.has_param("segment_recording")) {
+               try {
+                 std::string value = req.get_param_value("segment_recording");
+                 bool enable = (value == "1" || value == "true" || value == "on");
+                 
+                 if (enable) {
+                   cam->enableSegmentRecording();
+                   response["updated_properties"].push_back("segment_recording");
+                   response["segment_recording"] = true;
+                 } else {
+                   cam->disableSegmentRecording();
+                   response["updated_properties"].push_back("segment_recording");
+                   response["segment_recording"] = false;
+                 }
+                 updated = true;
+               } catch (...) {
+                 response["errors"].push_back("Invalid segment_recording value");
+               }
+             }
+             
+             if (updated) {
+               manager.saveSingleCameraToJSON(manager.config_path_, name);
+               response["message"] = "Camera properties updated and saved";
+             } else {
+               response["message"] = "No properties were updated";
+             }
+             
              res.set_content(response.dump(), "application/json");
            });
 

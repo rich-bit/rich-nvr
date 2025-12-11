@@ -176,7 +176,7 @@ private:
   bool motion_running_ = false;
 
   // Feature toggles/settings
-  bool segment_ = false;
+  std::atomic<bool> segment_{false};
   bool recording_ = false;
   bool gstreamerEncodedProxy_ = false;
   bool live555Proxied_ = false;

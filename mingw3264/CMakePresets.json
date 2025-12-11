@@ -1,0 +1,33 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "mingw64-release",
+      "displayName": "MinGW-w64 Release",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/mingw64-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/cmake/toolchains/mingw64.cmake",
+        "SDL2_ROOT": "/home/rick/SDL2-2.28.5/x86_64-w64-mingw32",
+        "FFMPEG_ROOT": "/home/rick/ffmpeg-8.0.1-full_build-shared",
+        "RICH_DIST_DIR": "${sourceDir}/../dist/client"
+      }
+    },
+    {
+      "name": "mingw32-release",
+      "displayName": "MinGW32 Release",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/mingw32-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/cmake/toolchains/mingw32.cmake",
+        "RICH_DIST_DIR": "${sourceDir}/../dist/client"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "mingw64-release", "configurePreset": "mingw64-release" },
+    { "name": "mingw32-release", "configurePreset": "mingw32-release" }
+  ]
+}

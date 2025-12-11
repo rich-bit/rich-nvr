@@ -36,10 +36,12 @@ CameraStream::CameraStream(
       motion_min_hits_(motion_min_hits), motion_decay_(motion_decay),
       motion_arrow_scale_(motion_arrow_scale),
       motion_arrow_thickness_(motion_arrow_thickness),
-      video_output_format_(video_output_format) {
+      video_output_format_(video_output_format)
+{
 
   // Check if stream has audio
-  if (pr_.probed && pr_.has_audio) {
+  if (pr_.probed && pr_.has_audio)
+  {
     ProbeRtspAudio(uri_, pr_, /*timeout_ms=*/1500);
     std::cout << "[Camerastream CTR] Stream " << uri_ << " reports audio "
               << pr_.has_audio << std::endl;
@@ -61,17 +63,21 @@ CameraStream::CameraStream(
 
 CameraStream::~CameraStream() { stop(); }
 
-void CameraStream::start() {
+void CameraStream::start()
+{
   if (running_)
     return;
 
   std::string pipeline_desc;
 
-  if (pr_.probed && pr_.has_audio) {
+  if (pr_.probed && pr_.has_audio)
+  {
 
     pipeline_desc = buildPipelineWithAudio();
     std::cout << "Pipeline string: " << pipeline_desc << std::endl;
-  } else {
+  }
+  else
+  {
     pipeline_desc = buildPipelineWithoutAudio();
     std::cout << "Pipeline string: " << pipeline_desc << std::endl;
   }
@@ -79,7 +85,8 @@ void CameraStream::start() {
   GError *error = nullptr;
   pipeline_ = gst_parse_launch(pipeline_desc.c_str(), &error);
 
-  if (!pipeline_) {
+  if (!pipeline_)
+  {
     std::cerr << "Failed to create pipeline: "
               << (error ? error->message : "Unknown error") << std::endl;
     if (error)
@@ -92,14 +99,25 @@ void CameraStream::start() {
   gst_element_set_state(static_cast<GstElement *>(pipeline_),
                         GST_STATE_PLAYING);
 
-  if (motion_frame_) {
+  if (motion_frame_)
+  {
     motion_sink_ = gst_bin_get_by_name(GST_BIN(pipeline_), "motion_sink");
     // Optionally check for null and log error if not found
-    if (!motion_sink_) {
+    if (!motion_sink_)
+    {
       std::cerr << "appsink 'motion_sink' not found in pipeline!" << std::endl;
     }
 
     startMotionLoop();
+  }
+
+  // Recreate segmentWorker if needed before starting
+  if (segment_ && !segmentWorker_)
+  {
+    std::string base_dir = core::PathUtils::getExecutableDir();
+    std::string safe_name = core::PathUtils::sanitizeCameraName(name_);
+    std::string segment_dir = base_dir + "/media/" + safe_name + "/tmp/";
+    segmentWorker_ = std::make_unique<SegmentWorker>(segment_dir, 500);
   }
 
   if (segment_)
@@ -108,7 +126,8 @@ void CameraStream::start() {
   running_ = true;
 }
 
-void CameraStream::stop() {
+void CameraStream::stop()
+{
   running_ = false; // Signal the motion loop to exit
   motion_running_ = false;
 
@@ -116,43 +135,50 @@ void CameraStream::stop() {
   if (motion_thread_.joinable())
     motion_thread_.join();
 
-  if (pipeline_) {
+  if (pipeline_)
+  {
     gst_element_set_state(static_cast<GstElement *>(pipeline_), GST_STATE_NULL);
     gst_object_unref(static_cast<GstElement *>(pipeline_));
     pipeline_ = nullptr;
   }
-  if (motion_sink_) {
+  if (motion_sink_)
+  {
     gst_object_unref(motion_sink_);
     motion_sink_ = nullptr;
   }
 
-  if (segmentWorker_) {
+  if (segmentWorker_)
+  {
     segmentWorker_->stop();
     segmentWorker_.reset();
   }
 }
 
-void CameraStream::enableSegmentRecording() {
+void CameraStream::enableSegmentRecording()
+{
   if (segment_)
     return;
   segment_ = true;
   rebuild();
 }
-void CameraStream::disableSegmentRecording() {
+void CameraStream::disableSegmentRecording()
+{
   if (!segment_)
     return;
   segment_ = false;
   rebuild();
 }
 
-void CameraStream::enableFullRecording(const std::string &filename) {
+void CameraStream::enableFullRecording(const std::string &filename)
+{
   if (recording_ && recordFile_ == filename)
     return;
   recording_ = true;
   recordFile_ = filename;
   rebuild();
 }
-void CameraStream::disableFullRecording() {
+void CameraStream::disableFullRecording()
+{
   if (!recording_)
     return;
   recording_ = false;
@@ -160,20 +186,23 @@ void CameraStream::disableFullRecording() {
   rebuild();
 }
 
-void CameraStream::enableTimestampOverlay() {
+void CameraStream::enableTimestampOverlay()
+{
   if (overlay_)
     return;
   overlay_ = true;
   rebuild();
 }
-void CameraStream::disableTimestampOverlay() {
+void CameraStream::disableTimestampOverlay()
+{
   if (!overlay_)
     return;
   overlay_ = false;
   rebuild();
 }
 
-void CameraStream::enableMotionFrameSaving(const std::string &outPath) {
+void CameraStream::enableMotionFrameSaving(const std::string &outPath)
+{
   // if (motion_frame_ && motionFile_ == outPath)
   if (motion_frame_)
     return;
@@ -182,7 +211,8 @@ void CameraStream::enableMotionFrameSaving(const std::string &outPath) {
   // motionFile_ = outPath;
   rebuild();
 }
-void CameraStream::disableMotionFrameSaving() {
+void CameraStream::disableMotionFrameSaving()
+{
   if (!motion_frame_)
     return;
   motion_frame_ = false;
@@ -190,7 +220,8 @@ void CameraStream::disableMotionFrameSaving() {
   rebuild();
 }
 
-void CameraStream::rebuild() {
+void CameraStream::rebuild()
+{
   bool was_running = running_;
   stop();
   if (was_running)
@@ -199,7 +230,8 @@ void CameraStream::rebuild() {
 
 std::string CameraStream::getMountPoint() const { return mount_point_; }
 
-std::string CameraStream::buildPipelineWithoutAudio() const {
+std::string CameraStream::buildPipelineWithoutAudio() const
+{
   const int rtspsrcLatency = 150;
 
   std::cout << "[CameraStream] Build pipeline without audio." << std::endl;
@@ -207,7 +239,8 @@ std::string CameraStream::buildPipelineWithoutAudio() const {
   std::string p;
 
   // 1) splitmuxsink only when segmenting
-  if (segment_) {
+  if (segment_)
+  {
     p += "splitmuxsink name=smux muxer-factory=matroskamux "
          "location=" +
          segment_path +
@@ -226,7 +259,8 @@ std::string CameraStream::buildPipelineWithoutAudio() const {
        "! h264parse config-interval=1 ! tee name=vt ";
 
   // 3a) Optional motion frames (decoded)
-  if (motion_frame_) {
+  if (motion_frame_)
+  {
     p += "vt. ! queue ! avdec_h264 ! videoconvert ! videoscale "
          "! video/x-raw,format=BGR "
          "! appsink name=motion_sink emit-signals=false max-buffers=1 "
@@ -234,7 +268,8 @@ std::string CameraStream::buildPipelineWithoutAudio() const {
   }
 
   // 3b) Encoded video to mux (only if segmenting)
-  if (segment_) {
+  if (segment_)
+  {
     p += "vt. ! queue ! video/x-h264,stream-format=avc,alignment=au "
          "! smux.video ";
   }
@@ -242,7 +277,8 @@ std::string CameraStream::buildPipelineWithoutAudio() const {
   return p;
 }
 
-std::string CameraStream::buildPipelineWithAudio() const {
+std::string CameraStream::buildPipelineWithAudio() const
+{
   const int rtspsrcLatency = 150;
 
   std::cout << "[CameraStream] Build pipeline with audio." << std::endl;
@@ -250,7 +286,8 @@ std::string CameraStream::buildPipelineWithAudio() const {
   std::string p;
 
   // 1) Declare splitmuxsink up front ONLY if segmenting is enabled
-  if (segment_) {
+  if (segment_)
+  {
     p += "splitmuxsink name=smux muxer-factory=matroskamux "
          "location=" +
          segment_path +
@@ -268,7 +305,8 @@ std::string CameraStream::buildPipelineWithAudio() const {
        "! h264parse config-interval=1 ! tee name=vt ";
 
   // 3a) Motion frames (decoded) — optional
-  if (motion_frame_) {
+  if (motion_frame_)
+  {
     p += "vt. ! queue ! avdec_h264 ! videoconvert ! videoscale "
          "! video/x-raw,format=BGR "
          "! appsink name=motion_sink emit-signals=false max-buffers=1 "
@@ -276,13 +314,15 @@ std::string CameraStream::buildPipelineWithAudio() const {
   }
 
   // 3b) Encoded video to mux (only if segmenting)
-  if (segment_) {
+  if (segment_)
+  {
     p += "vt. ! queue ! video/x-h264,stream-format=avc,alignment=au "
          "! smux.video ";
   }
 
   // 4) AUDIO: depay -> parse -> caps -> mux (only if segmenting)
-  if (segment_) {
+  if (segment_)
+  {
     p += "src. ! queue ! rtpmp4gdepay ! aacparse "
          "! audio/mpeg,mpegversion=4,stream-format=raw,rate=48000,channels=2 "
          "! queue ! smux.audio_0 ";
@@ -291,21 +331,24 @@ std::string CameraStream::buildPipelineWithAudio() const {
   return p;
 }
 
-void CameraStream::startMotionLoop() {
+void CameraStream::startMotionLoop()
+{
   motion_running_ = true;
 
   std::cout << "Initiate motion-loop, scale: " << motion_frame_scale_
             << ", segment: " << segment_ << std::endl;
 
-  motion_thread_ = std::thread([this] {
+  motion_thread_ = std::thread([this]
+                               {
     // Some vars outside actual loop
-    std::atomic<bool> recordOnMotion = segment_;
     cv::Mat prevGray;
     int motionHitCount = 0;
     std::chrono::seconds motion_hold_duration(motion_hold_duration_);
 
     while (motion_running_) {
       GstSample *sample = nullptr;
+      bool segment_enabled = segment_.load();  // Copy once per iteration
+
       if (motion_sink_)
         sample = gst_app_sink_pull_sample(GST_APP_SINK(motion_sink_));
 
@@ -464,24 +507,24 @@ void CameraStream::startMotionLoop() {
               }
             }
 
-            last_motion_frame_ = vis.clone();
-
             float avgMotion = 0;
 
-            // Optional: draw total motion score
+            // Calculate average motion score
             if (validCount > 0) {
               avgMotion = totalMotion / validCount;
-              std::ostringstream oss;
-              oss << "Motion: " << avgMotion;
-              cv::putText(vis, oss.str(), cv::Point(10, 30),
-                          cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(0, 0, 255),
-                          2);
             }
 
-            // Store the visualization as the last frame (optional)
+            // Always draw motion value on visualization
+            std::ostringstream oss;
+            oss << "Motion: " << avgMotion;
+            cv::putText(vis, oss.str(), cv::Point(10, 30),
+                        cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(0, 0, 255),
+                        2);
+            
+            // Always update the motion frame to show current state
             last_motion_frame_ = vis.clone();
 
-            // Not we handle when motion = true, and what happends
+            // Check if motion exceeds threshold for detection logic
             if (avgMotion > motion_threshold_) {
               ++motionHitCount;
               if (motionHitCount >= motion_min_hits_) {
@@ -504,9 +547,9 @@ void CameraStream::startMotionLoop() {
                                             : "[Motion] stopped.");
 
             // This applies only if motion-record = on
-            if (segment_) {
+            if (segment_enabled) {
 
-              if (recordOnMotion && motionDetected_)
+              if (motionDetected_)
                 segmentWorker_->SaveCurrentSegment();
 
               bool motionTransition = (!motionDetected_ && prevMotionDetected_);
@@ -558,15 +601,16 @@ void CameraStream::startMotionLoop() {
       gst_buffer_unmap(buffer, &map);
       gst_sample_unref(sample);
     }
-    std::cout << "Left motion-loop" << std::endl;
-  });
+    std::cout << "Left motion-loop" << std::endl; });
 }
 
 void CameraStream::exportInBackground(
     const std::vector<std::filesystem::path> &segments,
     const std::filesystem::path &outputFolder,
-    const std::string &outputFilename) {
-  std::thread([=]() {
+    const std::string &outputFilename)
+{
+  std::thread([=]()
+              {
     bool ok =
         VideoExporter::exportSegments(segments, outputFolder, outputFilename);
     if (ok) {
@@ -575,12 +619,13 @@ void CameraStream::exportInBackground(
     } else {
       std::cerr << "[MotionLoop] Export failed for " << outputFilename
                 << std::endl;
-    }
-  }).detach(); // No join, just fire-and-forget
+    } })
+      .detach(); // No join, just fire-and-forget
 }
 
 std::string CameraStream::getTimestampedFilename(const std::string &prefix,
-                                                 const std::string &ext) {
+                                                 const std::string &ext)
+{
   auto now = std::chrono::system_clock::now();
   std::time_t now_c = std::chrono::system_clock::to_time_t(now);
 
@@ -592,7 +637,8 @@ std::string CameraStream::getTimestampedFilename(const std::string &prefix,
 
   return oss.str(); // e.g., motion-2025-07-29_21-15-43.mp4
 }
-struct Ctx {
+struct Ctx
+{
   std::mutex *m;
   std::condition_variable *cv;
   std::atomic<bool> *done;
@@ -600,7 +646,8 @@ struct Ctx {
 };
 
 static void on_pad_added(GstElement * /*src*/, GstPad *pad,
-                         gpointer user_data) {
+                         gpointer user_data)
+{
   auto *ctx = static_cast<Ctx *>(user_data);
 
   // Prefer current caps; fall back to query
@@ -612,7 +659,8 @@ static void on_pad_added(GstElement * /*src*/, GstPad *pad,
 
   const GstStructure *s = gst_caps_get_structure(caps, 0);
   const char *media = gst_structure_get_string(s, "media");
-  if (media && g_str_equal(media, "audio")) {
+  if (media && g_str_equal(media, "audio"))
+  {
     ctx->out->has_audio = true;
     if (const char *enc = gst_structure_get_string(s, "encoding-name"))
       ctx->out->encoding = enc;
@@ -634,7 +682,8 @@ static void on_pad_added(GstElement * /*src*/, GstPad *pad,
   gst_caps_unref(caps);
 }
 
-static void on_no_more_pads(GstElement * /*src*/, gpointer user_data) {
+static void on_no_more_pads(GstElement * /*src*/, gpointer user_data)
+{
   auto *ctx = static_cast<Ctx *>(user_data);
   {
     std::lock_guard<std::mutex> lk(*ctx->m);
@@ -644,11 +693,13 @@ static void on_no_more_pads(GstElement * /*src*/, gpointer user_data) {
 }
 
 bool CameraStream::ProbeRtspAudio(const std::string &uri, AudioProbeResult &out,
-                                  int timeout_ms) {
+                                  int timeout_ms)
+{
   // Pipeline: just rtspsrc; we don't even link pads.
   GstElement *pipeline = gst_pipeline_new("probe-pipe");
   GstElement *src = gst_element_factory_make("rtspsrc", "probe-src");
-  if (!pipeline || !src) {
+  if (!pipeline || !src)
+  {
     if (pipeline)
       gst_object_unref(pipeline);
     return false;
@@ -680,7 +731,8 @@ bool CameraStream::ProbeRtspAudio(const std::string &uri, AudioProbeResult &out,
   {
     std::unique_lock<std::mutex> lk(m);
     cv.wait_for(lk, std::chrono::milliseconds(timeout_ms),
-                [&] { return done.load(); });
+                [&]
+                { return done.load(); });
   }
 
   g_signal_handler_disconnect(src, h_pad);
@@ -694,29 +746,34 @@ bool CameraStream::ProbeRtspAudio(const std::string &uri, AudioProbeResult &out,
   return true;
 }
 
-int CameraStream::addMotionRegion(const cv::Rect& rect, float angle) {
+int CameraStream::addMotionRegion(const cv::Rect &rect, float angle)
+{
   int id = next_region_id_++;
   motion_regions_.emplace_back(id, rect, angle);
-  std::cout << "[MotionRegion] Added region " << id << " at (" << rect.x << "," << rect.y 
+  std::cout << "[MotionRegion] Added region " << id << " at (" << rect.x << "," << rect.y
             << ") size " << rect.width << "x" << rect.height << " angle " << angle << "°" << std::endl;
   return id;
 }
 
-bool CameraStream::removeMotionRegion(int id) {
+bool CameraStream::removeMotionRegion(int id)
+{
   auto it = std::find_if(motion_regions_.begin(), motion_regions_.end(),
-                         [id](const MotionRegion& region) { return region.id == id; });
-  
-  if (it != motion_regions_.end()) {
+                         [id](const MotionRegion &region)
+                         { return region.id == id; });
+
+  if (it != motion_regions_.end())
+  {
     std::cout << "[MotionRegion] Removed region " << id << std::endl;
     motion_regions_.erase(it);
     return true;
   }
-  
+
   std::cout << "[MotionRegion] Region " << id << " not found for removal" << std::endl;
   return false;
 }
 
-void CameraStream::clearMotionRegions() {
+void CameraStream::clearMotionRegions()
+{
   std::cout << "[MotionRegion] Cleared " << motion_regions_.size() << " regions" << std::endl;
   motion_regions_.clear();
 }

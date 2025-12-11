@@ -45,6 +45,10 @@ public:
   int addMotionRegionToCamera(const std::string &cameraId, const cv::Rect &region, float angle = 0.0f);
   bool removeMotionRegionFromCamera(const std::string &cameraId, int regionId);
   void clearMotionRegionsFromCamera(const std::string &cameraId);
+  std::vector<MotionRegion> getMotionRegionsFromCamera(const std::string &cameraId) const;
+
+  // Save camera settings to JSON
+  void saveSingleCameraToJSON(const std::string &filename, const std::string &cameraName);
 
 private:
   std::map<std::string, std::unique_ptr<CameraStream>> cameras_;

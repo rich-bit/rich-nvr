@@ -152,12 +152,124 @@ void CameraManager::saveCamerasToJSON(const std::string &filename) {
                          {"rate", ap.rate},
                          {"channels", ap.channels}};
 
+    // Save motion regions
+    const auto &regions = cam->getMotionRegions();
+    cam_json["motion_regions"] = nlohmann::json::array();
+    for (const auto &region : regions) {
+      nlohmann::json region_json;
+      region_json["id"] = region.id;
+      region_json["x"] = region.rect.x;
+      region_json["y"] = region.rect.y;
+      region_json["w"] = region.rect.width;
+      region_json["h"] = region.rect.height;
+      region_json["angle"] = region.angle;
+      cam_json["motion_regions"].push_back(region_json);
+    }
+
     j["cameras"].push_back(cam_json);
   }
   std::ofstream file(filename);
   if (file) {
     file << j.dump(2) << std::endl;
     std::cout << "Cameras saved to " << filename << std::endl;
+  } else {
+    std::cerr << "Failed to write " << filename << std::endl;
+  }
+}
+
+void CameraManager::saveSingleCameraToJSON(const std::string &filename, const std::string &cameraName) {
+  // Load existing JSON
+  nlohmann::json j;
+  std::ifstream inFile(filename);
+  if (inFile.is_open()) {
+    try {
+      inFile >> j;
+    } catch (...) {
+      std::cerr << "Error reading existing cameras.json, creating new one" << std::endl;
+      j = nlohmann::json::object();
+    }
+    inFile.close();
+  }
+
+  // Ensure cameras array exists
+  if (!j.contains("cameras") || !j["cameras"].is_array()) {
+    j["cameras"] = nlohmann::json::array();
+  }
+
+  // Find the camera to update
+  auto it = cameras_.find(cameraName);
+  if (it == cameras_.end()) {
+    std::cerr << "Camera '" << cameraName << "' not found for JSON update" << std::endl;
+    return;
+  }
+
+  const auto &cam = it->second;
+  nlohmann::json cam_json;
+  cam_json["name"] = cam->name();
+  cam_json["uri"] = cam->uri();
+  cam_json["segment"] = cam->segment();
+  cam_json["recording"] = cam->recording();
+  cam_json["overlay"] = cam->overlay();
+  cam_json["motion_frame"] = cam->motion_frame();
+  cam_json["gstreamerEncodedProxy"] = cam->getGstreamerEncodedProxy();
+  cam_json["live555proxied"] = cam->getLive555Proxied();
+
+  cam_json["segment_bitrate"] = cam->getSegmentBitrate();
+  cam_json["segment_speed_preset"] = cam->getSegmentSpeedPreset();
+  cam_json["proxy_bitrate"] = cam->getProxyBitrate();
+  cam_json["proxy_speed_preset"] = cam->getProxySpeedPreset();
+
+  cam_json["motion_frame_scale"] = cam->getMotionFrameScale();
+  cam_json["noise_threshold"] = cam->getNoiseThreshold();
+  cam_json["motion_threshold"] = cam->getMotionThreshold();
+  cam_json["motion_min_hits"] = cam->getMotionMinHits();
+  cam_json["motion_decay"] = cam->getMotionDecay();
+  cam_json["motion_arrow_scale"] = cam->getMotionArrowScale();
+  cam_json["motion_arrow_thickness"] = cam->getMotionArrowThickness();
+  cam_json["video_output_format"] = cam->getVideoOutputFormat();
+
+  cv::Size sz = cam->getMotionFrameSize();
+  cam_json["motion_frame_size"] = {sz.width, sz.height};
+
+  const auto &ap = cam->audioProbe();
+  cam_json["audio"] = {{"has_audio", ap.has_audio},
+                       {"encoding", ap.encoding},
+                       {"rate", ap.rate},
+                       {"channels", ap.channels}};
+
+  // Save motion regions
+  const auto &regions = cam->getMotionRegions();
+  cam_json["motion_regions"] = nlohmann::json::array();
+  for (const auto &region : regions) {
+    nlohmann::json region_json;
+    region_json["id"] = region.id;
+    region_json["x"] = region.rect.x;
+    region_json["y"] = region.rect.y;
+    region_json["w"] = region.rect.width;
+    region_json["h"] = region.rect.height;
+    region_json["angle"] = region.angle;
+    cam_json["motion_regions"].push_back(region_json);
+  }
+
+  // Find and replace existing camera entry, or add if not found
+  bool found = false;
+  for (auto &entry : j["cameras"]) {
+    if (entry.is_object() && entry["name"] == cameraName) {
+      entry = cam_json;
+      found = true;
+      break;
+    }
+  }
+
+  if (!found) {
+    j["cameras"].push_back(cam_json);
+  }
+
+  // Write back to file
+  std::ofstream outFile(filename);
+  if (outFile) {
+    outFile << j.dump(2) << std::endl;
+    std::cout << "Camera '" << cameraName << "' saved to " << filename << std::endl;
   } else {
     std::cerr << "Failed to write " << filename << std::endl;
   }
@@ -238,7 +350,7 @@ void CameraManager::loadCamerasFromJSON(const std::string &filename) {
       if (!name.empty() && !uri.empty()) {
         addCamera(name, uri, segment, recording, overlay, motion_frame,
                   gstreamerEncodedProxy, live555proxied,
-                  /*loading=*/false, segment_bitrate, segment_speed_preset,
+                  /*loading=*/true, segment_bitrate, segment_speed_preset,
                   proxy_bitrate, proxy_speed_preset, motion_frame_size,
                   // --- New motion-related params:
                   motion_frame_scale, noise_threshold, motion_threshold,
@@ -246,6 +358,19 @@ void CameraManager::loadCamerasFromJSON(const std::string &filename) {
                   motion_arrow_thickness, video_output_format,
                   have_audio_hint ? std::optional<AudioProbeResult>{audio_hint}
                                   : std::nullopt);
+        
+        // Load motion regions after camera is added
+        if (entry.contains("motion_regions") && entry["motion_regions"].is_array()) {
+          for (const auto &region_json : entry["motion_regions"]) {
+            int x = region_json.value("x", 0);
+            int y = region_json.value("y", 0);
+            int w = region_json.value("w", 0);
+            int h = region_json.value("h", 0);
+            float angle = region_json.value("angle", 0.0f);
+            cv::Rect rect(x, y, w, h);
+            addMotionRegionToCamera(name, rect, angle);
+          }
+        }
       }
     }
   } else {
@@ -407,4 +532,14 @@ void CameraManager::clearMotionRegionsFromCamera(const std::string &cameraId) {
   
   it->second->clearMotionRegions();
   std::cout << "[CameraManager] Cleared all motion regions from camera '" << cameraId << "'" << std::endl;
+}
+
+std::vector<MotionRegion> CameraManager::getMotionRegionsFromCamera(const std::string &cameraId) const {
+  auto it = cameras_.find(cameraId);
+  if (it == cameras_.end()) {
+    std::cout << "[CameraManager] Camera '" << cameraId << "' not found for getting motion regions" << std::endl;
+    return {};
+  }
+  
+  return it->second->getMotionRegions();
 }
