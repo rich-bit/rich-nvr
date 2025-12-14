@@ -62,6 +62,19 @@ Each dependency remains under its original license.
 
 ---
 
+## Windows Distribution Components
+
+### MinGW-w64 / GCC runtime libraries
+- **License:** GPL with runtime exception and/or LGPL (varies by component)
+- **Source:** https://www.mingw-w64.org/ , https://gcc.gnu.org/
+- **Notes:** Windows builds staged to `dist/client/` may include MinGW/GCC runtime DLLs such as:
+   - `libstdc++-6.dll`
+   - `libgcc_s_seh-1.dll`
+   - `libwinpthread-1.dll`
+   These DLLs are not vendored in this repository. If you redistribute them, you must comply with the license terms applicable to the specific binaries you ship.
+
+---
+
 ## Licensing Compatibility
 
 - **GPL-3.0** (this project’s license) is fully compatible with LGPL, MIT, BSD, and zlib-licensed libraries.
