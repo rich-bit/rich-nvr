@@ -1,6 +1,19 @@
 # rich-nvr
 This is a do-it-yourself (DIY), under-construction, network video recorder suitable for home surveillance.
-Built with fantastic open-source software: **GStreamer**, **LIVE555**, **OpenCV**, **Qt 6**, **cpp-httplib** and **nlohmann/json**.
+Built with fantastic open-source software including **FFmpeg**, **SDL2**, **Dear ImGui**, **GStreamer**, **LIVE555**, **OpenCV**, **cpp-httplib** and **nlohmann/json**.
+
+## Documentation
+
+- Building: docs/BUILDING.md
+- Client usage: docs/USAGE.md
+
+## Highlights
+
+- RTSP grid client (SDL2 + ImGui + FFmpeg)
+- Switch audio between streams (left-click)
+- Audio overlay: volume + mute (auto-hides)
+- Stream name overlay (auto-hides unless pinned)
+- MinGW-w64 cross-build for Windows via `mingw3264/`
 
 ### Client idea illustration
 ```text

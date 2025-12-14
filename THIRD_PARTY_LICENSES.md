@@ -18,20 +18,37 @@ Each dependency remains under its original license.
 - **Source:** https://gstreamer.freedesktop.org/
 - **Notes:** Rich-NVR uses core GStreamer libraries and plugins. Some optional plugins may carry different licenses (e.g. GPL). Users are responsible for ensuring plugin license compliance.
 
-### Qt 6
-- **License:** LGPL-3.0 (with GPL/commercial alternatives)
-- **Source:** https://www.qt.io/
-- **Notes:** Rich-NVR is built against the LGPL version of Qt 6.  
-  Under LGPL terms, users may relink against a modified Qt version.
-
 ### OpenCV
 - **License:** BSD 3-Clause
 - **Source:** https://opencv.org/
 - **Notes:** Permissive license, compatible with GPL-3.0.
 
+### Qt 6 (QtCore)
+- **License:** LGPL-3.0 **or** GPL-3.0 **or** Commercial (depends on how Qt is obtained/licensed)
+- **Source:** https://www.qt.io/
+- **Notes:** Rich-NVR uses Qt (Qt6::Core) in the server/export pipeline. Qt is typically provided by the system or a separate Qt distribution (not vendored in this repo).
+   If redistributing Qt binaries, you must comply with the license terms of the specific Qt build you ship.
+
+### FFmpeg (libavformat / libavcodec / libavutil / libswscale / libswresample)
+- **License:** LGPL-2.1+ **or** GPL-2.0+ (depends on how FFmpeg is configured/built)
+- **Source:** https://ffmpeg.org/
+- **Notes:** Rich-NVR includes and links against FFmpeg libraries for decoding and media processing.
+   FFmpeg is typically provided by the system or a separate FFmpeg distribution (not vendored in this repo).
+   If redistributing FFmpeg binaries, you must also comply with the license terms of the specific FFmpeg build you ship.
+
 ---
 
 ## Supporting Libraries
+
+### Dear ImGui
+- **License:** MIT
+- **Source:** https://github.com/ocornut/imgui
+- **Notes:** ImGui is vendored in this repository under `third_party/imgui/`. See `third_party/imgui/LICENSE.txt`.
+
+### SDL2
+- **License:** zlib
+- **Source:** https://www.libsdl.org/
+- **Notes:** The client uses SDL2 for windowing, rendering, and audio. When cross-building for Windows, `SDL2.dll` is staged into `dist/client/`.
 
 ### nlohmann/json
 - **License:** MIT
@@ -47,9 +64,9 @@ Each dependency remains under its original license.
 
 ## Licensing Compatibility
 
-- **GPL-3.0** (this project’s license) is fully compatible with LGPL, MIT, and BSD-licensed libraries.
+- **GPL-3.0** (this project’s license) is fully compatible with LGPL, MIT, BSD, and zlib-licensed libraries.
 - All permissive libraries (MIT/BSD) are combined under GPL-3.0 without conflict.
-- LGPL libraries (Qt, GStreamer, LIVE555) are linked in compliance with LGPL; the combined work is distributed under GPL-3.0.
+- LGPL libraries (GStreamer, LIVE555, Qt if using an LGPL-licensed Qt build) are linked in compliance with LGPL; the combined work is distributed under GPL-3.0.
 
 ---
 
@@ -58,7 +75,7 @@ Each dependency remains under its original license.
 If you redistribute Rich-NVR:
 1. Provide access to the **complete corresponding source code** of Rich-NVR (per GPL-3.0).
 2. Make available notices/licenses for all third-party libraries (this file).
-3. For LGPL libraries (Qt, GStreamer, LIVE555):
+3. For LGPL libraries (GStreamer, LIVE555, Qt if using an LGPL-licensed Qt build):
    - You must allow users to **relink against modified versions** of those libraries (e.g. by using dynamic linking or providing object files).
 
 ---
