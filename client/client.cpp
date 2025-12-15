@@ -1567,13 +1567,32 @@ int main(int argc, char **argv)
     // Connect async worker to configuration panel
     configuration_panel.setAsyncWorker(&async_network_worker);
 
+    constexpr int kStartupRetryAttempts = 3;
+    constexpr std::chrono::milliseconds kStartupRetryDelay{1000};
+
     for (int i = 0; i < stream_count; ++i)
     {
-        if (!open_stream(i, stream_urls[i], i == 0))
+        bool opened = false;
+        for (int attempt = 0; attempt < kStartupRetryAttempts && !opened; ++attempt)
         {
-            return 5;
+            if (attempt > 0)
+            {
+                std::cerr << "Retrying stream " << i << " (" << stream_names[i] << "), attempt " << (attempt + 1) << "/" << kStartupRetryAttempts << "...\n";
+                std::this_thread::sleep_for(kStartupRetryDelay);
+            }
+            opened = open_stream(i, stream_urls[i], i == 0);
         }
-        record_stream_open(i);
+        
+        if (opened)
+        {
+            record_stream_open(i);
+        }
+        else
+        {
+            std::cerr << "Stream " << i << " (" << stream_names[i] << ") not available after " << kStartupRetryAttempts << " attempts. Will retry periodically.\n";
+            release_stream(streams[i]);
+            schedule_stream_retry(i, kStreamRetryInitialDelay);
+        }
     }
 
     if (!reference_dimensions_ready)
@@ -1726,6 +1745,7 @@ int main(int argc, char **argv)
     int hovered_stream = -1;
     bool reload_all_requested = false;
     int reload_stream_requested = -1;
+    int remove_camera_requested = -1;
     bool fullscreen_view = false;
     bool window_is_fullscreen = false;
     int fullscreen_stream = -1;
@@ -2143,24 +2163,7 @@ int main(int argc, char **argv)
                                          context_stream_index < static_cast<int>(stream_configs.size());
                 if (ImGui::MenuItem("Remove Camera", nullptr, false, can_remove_camera))
                 {
-                    int idx = context_stream_index;
-                    std::string camera_name = stream_configs[idx].name;
-                    bool via_server = stream_configs[idx].via_server;
-
-                    // Remove from client
-                    stream_configs.erase(stream_configs.begin() + idx);
-                    stream_names.erase(stream_names.begin() + idx);
-                    persist_config();
-
-                    // Post to server if camera was proxied
-                    if (via_server)
-                    {
-                        async_network_worker.enqueueTask([camera_name, endpoint = client_config.server_endpoint]()
-                                                         { client_network::remove_camera(endpoint, camera_name); });
-                    }
-
-                    // Request full restart
-                    reload_all_requested = true;
+                    remove_camera_requested = context_stream_index;
                     show_context_menu = false;
                 }
                 // Motion-frame only enabled if at least one camera is proxied through server
@@ -2507,6 +2510,69 @@ int main(int argc, char **argv)
 
         configuration_panel.render(show_configuration_panel);
 
+        // Render unavailable stream status overlays
+        {
+            int out_w = 0;
+            int out_h = 0;
+            if (SDL_GetRendererOutputSize(renderer, &out_w, &out_h) == 0 && out_w > 0 && out_h > 0)
+            {
+                for (int i = 0; i < stream_count; ++i)
+                {
+                    // Show status message for streams that are not connected
+                    if (!streams[i].fmt_ctx && !fullscreen_view)
+                    {
+                        int cell_w = out_w / GRID_COLS;
+                        int cell_h = out_h / GRID_ROWS;
+                        int col = i % GRID_COLS;
+                        int row = i / GRID_COLS;
+                        
+                        // Center the status message in the cell
+                        ImVec2 cell_center = ImVec2(
+                            static_cast<float>(col * cell_w + cell_w / 2),
+                            static_cast<float>(row * cell_h + cell_h / 2)
+                        );
+                        
+                        std::string status_window_name = "##status" + std::to_string(i);
+                        ImGui::SetNextWindowPos(cell_center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+                        ImGui::SetNextWindowBgAlpha(0.85f);
+                        ImGuiWindowFlags status_flags = ImGuiWindowFlags_NoDecoration |
+                                                       ImGuiWindowFlags_AlwaysAutoResize |
+                                                       ImGuiWindowFlags_NoMove |
+                                                       ImGuiWindowFlags_NoSavedSettings |
+                                                       ImGuiWindowFlags_NoInputs;
+                        
+                        if (ImGui::Begin(status_window_name.c_str(), nullptr, status_flags))
+                        {
+                            std::string stream_label = (i < static_cast<int>(stream_names.size()) && !stream_names[i].empty())
+                                                          ? stream_names[i]
+                                                          : ("Stream " + std::to_string(i));
+                            ImGui::TextUnformatted(stream_label.c_str());
+                            ImGui::Separator();
+                            ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "Not available");
+                            
+                            // Show retry countdown if scheduled
+                            if (i < static_cast<int>(stream_retry_deadlines.size()) && 
+                                stream_retry_deadlines[i] != std::chrono::steady_clock::time_point{})
+                            {
+                                auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    stream_retry_deadlines[i] - frame_now);
+                                if (remaining.count() > 0)
+                                {
+                                    float seconds = remaining.count() / 1000.0f;
+                                    ImGui::Text("Retry in %.1fs", seconds);
+                                }
+                                else
+                                {
+                                    ImGui::TextUnformatted("Reconnecting...");
+                                }
+                            }
+                        }
+                        ImGui::End();
+                    }
+                }
+            }
+        }
+
         // Render audio controls overlay (only when the active stream actually has audio).
         {
             const int audio_stream_idx = active_audio_stream.load();
@@ -2642,6 +2708,56 @@ int main(int argc, char **argv)
 #endif
         }
 
+        // Handle camera removal
+        if (remove_camera_requested >= 0 && remove_camera_requested < stream_count)
+        {
+            int idx = remove_camera_requested;
+            std::string camera_name = stream_configs[idx].name;
+            bool via_server = stream_configs[idx].via_server;
+
+            // Signal worker to stop (don't wait/join - avoid blocking main thread)
+            streams[idx].worker_stop.store(true);
+            streams[idx].interrupt_ctx.abort = true;
+
+            // Cancel any pending retry
+            {
+                std::lock_guard<std::mutex> lock(stream_state_mutex);
+                if (idx < static_cast<int>(stream_retry_deadlines.size()))
+                {
+                    stream_retry_deadlines[idx] = std::chrono::steady_clock::time_point{};
+                }
+            }
+
+            // Remove from configuration vectors immediately (so it won't persist or be re-added)
+            stream_configs.erase(stream_configs.begin() + idx);
+            stream_urls.erase(stream_urls.begin() + idx);
+            stream_names.erase(stream_names.begin() + idx);
+            overlay_always_show_stream.erase(overlay_always_show_stream.begin() + idx);
+            stream_retry_deadlines.erase(stream_retry_deadlines.begin() + idx);
+            stream_last_frame_times.erase(stream_last_frame_times.begin() + idx);
+            stream_stall_reported.erase(stream_stall_reported.begin() + idx);
+            
+            // Update stream count
+            stream_count = static_cast<int>(stream_configs.size());
+
+            // Persist config immediately
+            persist_config();
+
+            // Notify server asynchronously
+            if (via_server)
+            {
+                async_network_worker.enqueueTask([camera_name, endpoint = client_config.server_endpoint]()
+                                                 { client_network::remove_camera(endpoint, camera_name); });
+            }
+
+            std::cerr << "Camera removal initiated: " << camera_name << " (was index " << idx << ")\n";
+            
+            // Schedule a full reload to cleanly rebuild all streams
+            // This will wait for workers to finish, then reinitialize everything based on the updated stream_configs
+            reload_all_requested = true;
+            remove_camera_requested = -1;
+        }
+
         if (reload_stream_requested < 0)
         {
             for (int i = 0; i < stream_count; ++i)
@@ -2670,6 +2786,17 @@ int main(int argc, char **argv)
             if (reload_all_requested)
             {
                 std::fill(canvas_buffer.begin(), canvas_buffer.end(), 0);
+                
+                // Release all existing streams (this will wait for workers to finish)
+                for (auto &stream : streams)
+                {
+                    release_stream(stream);
+                }
+                
+                // Reinitialize streams deque to match the new stream_count
+                streams.clear();
+                streams.resize(stream_count);
+                
                 bool stream0_reopened = false;
                 std::vector<int> streams_to_restart;
                 streams_to_restart.reserve(stream_count);
@@ -2679,7 +2806,7 @@ int main(int argc, char **argv)
                     {
                         std::cerr << "Failed to reload stream: " << stream_urls[i] << "\n";
                         schedule_stream_retry(i, kStreamRetryInitialDelay);
-                        break;
+                        continue; // Don't break - try to open remaining streams
                     }
                     record_stream_open(i);
                     if (ensure_canvas_dimensions && streams[i].vctx)
@@ -2695,7 +2822,13 @@ int main(int argc, char **argv)
                         stream0_reopened = true;
                     }
                 }
-                if (need_audio_reset && stream0_reopened)
+                
+                if (stream_count == 0)
+                {
+                    placeholder_dimensions = true;
+                }
+                
+                if (need_audio_reset && stream0_reopened && stream_count > 0)
                 {
                     if (!configure_audio(streams[0]))
                     {
