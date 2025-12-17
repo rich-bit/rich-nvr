@@ -6,14 +6,30 @@
 #include <cstring>
 #include <mutex>
 #include <utility>
+#include <chrono>
+#include <iomanip>
+#include <iostream>
 
 #include "AsyncNetworkWorker.h"
 #include "ClientNetworking.h"
 #include "third_party/imgui/imgui.h"
 
+extern bool g_motion_frame_debug;
+
+#define MOTION_FRAME_LOG(msg) \
+    do { \
+        if (g_motion_frame_debug) { \
+            auto now = std::chrono::steady_clock::now(); \
+            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count(); \
+            double seconds = (ms % 100000) / 1000.0; \
+            std::cout << "[MotionFrame][" << std::fixed << std::setprecision(3) << seconds << "s] " << msg << std::endl; \
+        } \
+    } while (0)
+
 ConfigurationPanel::ConfigurationPanel(ConfigurationWindowSettings &window_settings,
                                        PersistCallback persist_callback,
                                        AddCameraCallback add_camera_callback,
+                                       ProbeStreamCallback probe_stream_callback,
                                        const std::string &default_server_endpoint,
                                        ThreadInfoCallback thread_info_callback,
                                        ShowMetricsCallback show_metrics_callback,
@@ -37,6 +53,7 @@ ConfigurationPanel::ConfigurationPanel(ConfigurationWindowSettings &window_setti
       window_settings_(window_settings),
       persist_callback_(std::move(persist_callback)),
       add_camera_callback_(std::move(add_camera_callback)),
+      probe_stream_callback_(std::move(probe_stream_callback)),
       thread_info_callback_(std::move(thread_info_callback)),
       show_metrics_callback_(std::move(show_metrics_callback)),
       get_cameras_callback_(std::move(get_cameras_callback)),
@@ -66,6 +83,10 @@ ConfigurationPanel::ConfigurationPanel(ConfigurationWindowSettings &window_setti
       server_health_uptime_(0),
       server_health_rtsp_port_(0),
       last_health_check_time_(0.0f),
+      proxy_initiate_in_progress_(false),
+      proxy_initiated_successfully_(false),
+      proxy_probe_in_progress_(false),
+      last_proxy_probe_time_(0.0f),
       selected_camera_index_(0),
       motion_frame_enabled_(false),
       motion_frame_texture_(nullptr),
@@ -80,8 +101,21 @@ ConfigurationPanel::ConfigurationPanel(ConfigurationWindowSettings &window_setti
       last_region_fetch_time_(0.0f),
       show_record_motion_warning_(false),
       dont_show_record_motion_warning_(false),
-      async_worker_(nullptr)
+      async_worker_(nullptr),
+      probe_in_progress_(false),
+      close_after_save_(false),
+      last_server_camera_fetch_time_(0.0f),
+      server_camera_fetch_in_progress_(false),
+      motion_frame_fetch_in_progress_(false),
+      has_pending_motion_frame_(false),
+      pending_motion_frame_width_(0),
+      pending_motion_frame_height_(0),
+      motion_frame_fetch_interval_(1.0f)
 {
+    // Create dedicated worker thread for motion frame fetching
+    // This prevents motion frame updates from being delayed by other async tasks
+    motion_frame_worker_ = std::make_unique<AsyncNetworkWorker>();
+    
     add_camera_name_.fill(0);
     add_camera_rtsp_.fill(0);
     server_endpoint_.fill(0);
@@ -99,6 +133,14 @@ void ConfigurationPanel::render(bool &open)
     {
         return;
     }
+    
+    // Close window if save was successful
+    if (close_after_save_)
+    {
+        open = false;
+        close_after_save_ = false;
+        return;
+    }
 
     const float min_window_width = 360.0f;
     const float min_window_height = 240.0f;
@@ -111,7 +153,7 @@ void ConfigurationPanel::render(bool &open)
     ImGui::SetNextWindowSize(ImVec2(window_settings_.width, window_settings_.height), ImGuiCond_Once);
     ImGui::SetNextWindowSizeConstraints(ImVec2(min_window_width, min_window_height), ImVec2(max_window_width, max_window_height));
 
-    // Disable window dragging only when Motion-frame tab is active
+    // Disable window dragging only when Motion Frames tab is active
     ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoCollapse;
     if (active_tab_ == Tab::MotionFrame)
     {
@@ -255,11 +297,79 @@ void ConfigurationPanel::renderAddCameraTab(bool set_selected)
     {
         active_tab_ = Tab::AddCamera;
 
-        ImGui::Checkbox("Connect through RichServer", &add_camera_via_server_);
-        ImGui::InputText("RTSP address", add_camera_rtsp_.data(), add_camera_rtsp_.size());
+        if (ImGui::Checkbox("Connect through RichServer", &add_camera_via_server_))
+        {
+            // Reset proxy state when this checkbox changes
+            proxy_initiated_successfully_ = false;
+            proxy_initiate_message_.clear();
+            proxied_rtsp_url_.clear();
+            last_probe_result_ = ProbeStreamResult();
+            proxy_probe_in_progress_ = false;
+            last_proxy_probe_time_ = 0.0f;
+        }
+        
+        if (ImGui::InputText("RTSP address", add_camera_rtsp_.data(), add_camera_rtsp_.size()))
+        {
+            // Reset proxy state when RTSP URL changes
+            proxy_initiated_successfully_ = false;
+            proxy_initiate_message_.clear();
+            proxied_rtsp_url_.clear();
+            last_probe_result_ = ProbeStreamResult();
+            proxy_probe_in_progress_ = false;
+            last_proxy_probe_time_ = 0.0f;
+        }
+        
+        // Probe stream button (only for direct connections)
+        ImGui::BeginDisabled(add_camera_via_server_ || probe_in_progress_);
+        if (ImGui::Button("Probe Stream"))
+        {
+            if (probe_stream_callback_ && add_camera_rtsp_[0] != '\0')
+            {
+                probe_in_progress_ = true;
+                std::string url(add_camera_rtsp_.data());
+                
+                if (async_worker_)
+                {
+                    async_worker_->enqueueTask([this, url]() {
+                        last_probe_result_ = probe_stream_callback_(url);
+                        probe_in_progress_ = false;
+                    });
+                }
+                else
+                {
+                    last_probe_result_ = probe_stream_callback_(url);
+                    probe_in_progress_ = false;
+                }
+            }
+        }
+        ImGui::EndDisabled();
+        
+        if (probe_in_progress_)
+        {
+            ImGui::SameLine();
+            ImGui::TextDisabled("Probing...");
+        }
+        else if (last_probe_result_.success)
+        {
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "%dx%d%s", 
+                last_probe_result_.width, 
+                last_probe_result_.height,
+                last_probe_result_.has_audio ? " (audio)" : "");
+        }
+        else if (!last_probe_result_.error_message.empty())
+        {
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "Failed");
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("%s", last_probe_result_.error_message.c_str());
+            }
+        }
 
-        ImGui::BeginDisabled(!add_camera_via_server_);
         ImGui::InputText("Camera name", add_camera_name_.data(), add_camera_name_.size());
+        
+        ImGui::BeginDisabled(!add_camera_via_server_);
         ImGui::InputText("Server endpoint", server_endpoint_.data(), server_endpoint_.size());
         
         // Server health check (async, every 3 seconds)
@@ -327,7 +437,17 @@ void ConfigurationPanel::renderAddCameraTab(bool set_selected)
         
         ImGui::Checkbox("Timestamp overlay", &add_camera_overlay_);
         ImGui::Checkbox("Motion frame", &add_camera_motion_frame_);
-        ImGui::Checkbox("LIVE555 proxy", &add_camera_live555_proxy_);
+        
+        if (ImGui::Checkbox("LIVE555 proxy", &add_camera_live555_proxy_))
+        {
+            // Reset proxy state when this checkbox changes
+            proxy_initiated_successfully_ = false;
+            proxy_initiate_message_.clear();
+            proxied_rtsp_url_.clear();
+            last_probe_result_ = ProbeStreamResult();
+            proxy_probe_in_progress_ = false;
+            last_proxy_probe_time_ = 0.0f;
+        }
 
         ImGui::Spacing();
         ImGui::Separator();
@@ -358,6 +478,114 @@ void ConfigurationPanel::renderAddCameraTab(bool set_selected)
             ImGui::TextDisabled("Advanced options are available when routing through RichServer.");
         }
 
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        // Determine if we need to proxy the stream
+        bool needs_proxy = add_camera_via_server_ && add_camera_live555_proxy_;
+        
+        // Retry probing the proxied stream if proxy succeeded but probe hasn't yet
+        if (needs_proxy && proxy_initiated_successfully_ && !last_probe_result_.success && 
+            !proxy_probe_in_progress_ && async_worker_ && !proxied_rtsp_url_.empty())
+        {
+            float current_time = ImGui::GetTime();
+            if (current_time - last_proxy_probe_time_ > 2.0f)  // Retry every 2 seconds
+            {
+                last_proxy_probe_time_ = current_time;
+                proxy_probe_in_progress_ = true;
+                
+                std::string url_to_probe = proxied_rtsp_url_;
+                async_worker_->enqueueTask([this, url_to_probe]() {
+                    if (probe_stream_callback_)
+                    {
+                        last_probe_result_ = probe_stream_callback_(url_to_probe);
+                    }
+                    proxy_probe_in_progress_ = false;
+                });
+            }
+        }
+        
+        // Show "Initiate Proxy" button if proxying is needed
+        if (needs_proxy)
+        {
+            ImGui::BeginDisabled(proxy_initiate_in_progress_ || !server_health_available_);
+            if (ImGui::Button("Initiate Proxy"))
+            {
+                if (async_worker_)
+                {
+                    proxy_initiate_in_progress_ = true;
+                    proxy_initiated_successfully_ = false;
+                    proxy_initiate_message_.clear();
+                    proxied_rtsp_url_.clear();
+                    last_probe_result_ = ProbeStreamResult();  // Clear previous probe
+                    proxy_probe_in_progress_ = false;
+                    last_proxy_probe_time_ = 0.0f;
+                    
+                    // Prepare the request
+                    AddCameraRequest request;
+                    request.connect_via_server = true;
+                    request.rtsp_url = add_camera_rtsp_.data();
+                    request.name = add_camera_name_.data();
+                    request.server_endpoint = server_endpoint_.data();
+                    request.segment = add_camera_segment_;
+                    request.recording = false;
+                    request.overlay = add_camera_overlay_;
+                    request.motion_frame = add_camera_motion_frame_;
+                    request.gstreamer_proxy = false;
+                    request.live555_proxy = true;  // Always true for proxy initiation
+                    request.segment_bitrate = 2000;
+                    request.segment_speed_preset = "medium";
+                    request.proxy_bitrate = 1500;
+                    request.proxy_speed_preset = "veryfast";
+                    request.motion_frame_width = 0;
+                    request.motion_frame_height = 0;
+                    request.motion_frame_scale = add_camera_motion_frame_scale_;
+                    request.noise_threshold = add_camera_noise_threshold_;
+                    request.motion_threshold = add_camera_motion_threshold_;
+                    request.motion_min_hits = add_camera_motion_min_hits_;
+                    request.motion_decay = add_camera_motion_decay_;
+                    request.motion_arrow_scale = add_camera_motion_arrow_scale_;
+                    request.motion_arrow_thickness = add_camera_motion_arrow_thickness_;
+                    
+                    async_worker_->enqueueTask([this, request]() {
+                        std::string response_body;
+                        auto result = client_network::send_add_camera_request(request, response_body);
+                        
+                        proxy_initiated_successfully_ = result.success;
+                        proxy_initiate_message_ = result.message;
+                        
+                        // If successful, build the proxied RTSP URL and probe it
+                        if (result.success)
+                        {
+                            proxied_rtsp_url_ = client_network::build_proxy_rtsp_url(
+                                request.server_endpoint, request.name);
+                            
+                            // Now probe the proxied stream
+                            if (probe_stream_callback_)
+                            {
+                                last_probe_result_ = probe_stream_callback_(proxied_rtsp_url_);
+                            }
+                        }
+                        
+                        proxy_initiate_in_progress_ = false;
+                    });
+                }
+            }
+            ImGui::EndDisabled();
+            
+            if (!server_health_available_)
+            {
+                ImGui::SameLine();
+                ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "Server unavailable");
+            }
+            
+            ImGui::SameLine();
+        }
+
+        // Disable Save button if proxy is needed but not yet probed successfully
+        bool save_disabled = needs_proxy && (!proxy_initiated_successfully_ || !last_probe_result_.success);
+        ImGui::BeginDisabled(save_disabled);
         if (ImGui::Button("Save"))
         {
             if (!add_camera_callback_)
@@ -368,8 +596,21 @@ void ConfigurationPanel::renderAddCameraTab(bool set_selected)
             else
             {
                 AddCameraRequest request;
-                request.connect_via_server = add_camera_via_server_;
-                request.rtsp_url = add_camera_rtsp_.data();
+                
+                // Use proxied URL if proxy was initiated, otherwise use original RTSP URL
+                if (needs_proxy && proxy_initiated_successfully_ && !proxied_rtsp_url_.empty())
+                {
+                    request.rtsp_url = proxied_rtsp_url_;
+                    // Keep connect_via_server = true for proxied cameras so they appear in Motion Frames tab
+                    // The client will connect directly to the proxied URL, but the camera is still managed by the server
+                    request.connect_via_server = true;
+                }
+                else
+                {
+                    request.rtsp_url = add_camera_rtsp_.data();
+                    request.connect_via_server = add_camera_via_server_;
+                }
+                
                 request.name = add_camera_name_.data();
                 request.server_endpoint = server_endpoint_.data();
                 request.segment = add_camera_segment_;
@@ -377,7 +618,7 @@ void ConfigurationPanel::renderAddCameraTab(bool set_selected)
                 request.overlay = add_camera_overlay_;
                 request.motion_frame = add_camera_motion_frame_;
                 request.gstreamer_proxy = false;  // Always disabled
-                request.live555_proxy = add_camera_live555_proxy_;
+                request.live555_proxy = false;  // Always false when saving (proxy already initiated)
                 request.segment_bitrate = 2000;  // Default value
                 request.segment_speed_preset = "medium";
                 request.proxy_bitrate = 1500;  // Default value
@@ -395,6 +636,106 @@ void ConfigurationPanel::renderAddCameraTab(bool set_selected)
                 auto result = add_camera_callback_(request);
                 add_camera_status_success_ = result.success;
                 add_camera_status_ = result.message;
+                
+                // Reset all fields and close window on success
+                if (result.success)
+                {
+                    // Reset all input fields
+                    std::snprintf(add_camera_name_.data(), add_camera_name_.size(), "%s", "Camera");
+                    std::snprintf(add_camera_rtsp_.data(), add_camera_rtsp_.size(), "%s", "rtsp://");
+                    
+                    // Reset checkboxes to defaults
+                    add_camera_via_server_ = true;
+                    add_camera_segment_ = false;
+                    add_camera_overlay_ = false;
+                    add_camera_motion_frame_ = true;
+                    add_camera_live555_proxy_ = true;
+                    
+                    // Reset motion detection settings to defaults
+                    add_camera_motion_frame_scale_ = 1.0f;
+                    add_camera_noise_threshold_ = 0.3f;
+                    add_camera_motion_threshold_ = 0.5f;
+                    add_camera_motion_min_hits_ = 4;
+                    add_camera_motion_decay_ = 20;
+                    add_camera_motion_arrow_scale_ = 1.0f;
+                    add_camera_motion_arrow_thickness_ = 2;
+                    
+                    // Reset probe results
+                    last_probe_result_ = ProbeStreamResult();
+                    probe_in_progress_ = false;
+                    
+                    // Reset proxy state
+                    proxy_initiated_successfully_ = false;
+                    proxy_initiate_message_.clear();
+                    proxied_rtsp_url_.clear();
+                    proxy_probe_in_progress_ = false;
+                    last_proxy_probe_time_ = 0.0f;
+                    
+                    // Reset status message
+                    add_camera_status_.clear();
+                    add_camera_status_success_ = false;
+                    
+                    // Signal to close the window
+                    close_after_save_ = true;
+                }
+            }
+        }
+        ImGui::EndDisabled();
+        
+        if (save_disabled && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        {
+            if (needs_proxy && !proxy_initiated_successfully_)
+            {
+                ImGui::SetTooltip("Please initiate the proxy first before saving");
+            }
+            else if (needs_proxy && !last_probe_result_.success)
+            {
+                ImGui::SetTooltip("Waiting for successful probe of proxied stream");
+            }
+        }
+        
+        // Status messages below the buttons
+        ImGui::Spacing();
+        
+        if (needs_proxy)
+        {
+            if (proxy_initiate_in_progress_)
+            {
+                ImGui::TextDisabled("Initiating proxy and probing stream...");
+            }
+            else if (!proxy_initiate_message_.empty())
+            {
+                ImVec4 color = proxy_initiated_successfully_ ? ImVec4(0.0f, 1.0f, 0.0f, 1.0f)
+                                                              : ImVec4(1.0f, 0.0f, 0.0f, 1.0f);
+                ImGui::TextColored(color, "Proxy: %s", proxy_initiate_message_.c_str());
+                
+                // Show probe result if proxy was successful
+                if (proxy_initiated_successfully_)
+                {
+                    if (proxy_probe_in_progress_)
+                    {
+                        ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Probe: Retrying...");
+                    }
+                    else if (last_probe_result_.success)
+                    {
+                        ImGui::TextColored(ImVec4(0.0f, 1.0f, 0.0f, 1.0f), "Probe: %dx%d%s", 
+                            last_probe_result_.width, 
+                            last_probe_result_.height,
+                            last_probe_result_.has_audio ? " (audio)" : "");
+                    }
+                    else if (!last_probe_result_.error_message.empty())
+                    {
+                        ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "Probe: Failed (retrying every 2s)");
+                        if (ImGui::IsItemHovered())
+                        {
+                            ImGui::SetTooltip("%s", last_probe_result_.error_message.c_str());
+                        }
+                    }
+                    else
+                    {
+                        ImGui::TextDisabled("Probe: Waiting...");
+                    }
+                }
             }
         }
 
@@ -410,52 +751,121 @@ void ConfigurationPanel::renderAddCameraTab(bool set_selected)
     }
 }
 
+// External globals for sharing prefetched JPEG data with fetch callback
+extern std::vector<unsigned char> g_prefetched_motion_frame_jpeg;
+extern bool g_use_prefetched_jpeg;
+extern std::mutex g_prefetched_jpeg_mutex;
+
+void ConfigurationPanel::decode_motion_frame_from_buffer_(const std::vector<unsigned char>& jpeg_buffer,
+                                                          void*& texture_out, int& width_out, int& height_out)
+{
+    // Pass the prefetched JPEG data to the global buffer
+    // The fetch callback will use this instead of doing a network fetch
+    {
+        std::lock_guard<std::mutex> lock(g_prefetched_jpeg_mutex);
+        g_prefetched_motion_frame_jpeg = jpeg_buffer;
+        g_use_prefetched_jpeg = true;
+    }
+    
+    // Now call the fetch callback - it will use our prefetched data
+    if (fetch_motion_frame_callback_)
+    {
+        fetch_motion_frame_callback_("dummy", texture_out, width_out, height_out);
+    }
+    
+    // Reset flag
+    {
+        std::lock_guard<std::mutex> lock(g_prefetched_jpeg_mutex);
+        g_use_prefetched_jpeg = false;
+    }
+}
+
 void ConfigurationPanel::renderMotionFrameTab(bool set_selected)
 {
     ImGuiTabItemFlags flags = set_selected ? ImGuiTabItemFlags_SetSelected : 0;
-    if (ImGui::BeginTabItem("Motion-frame", nullptr, flags))
+    if (ImGui::BeginTabItem("Motion Frames", nullptr, flags))
     {
         active_tab_ = Tab::MotionFrame;
 
-        if (!get_cameras_callback_)
+        // Fetch server cameras if we haven't recently or on first load
+        const float fetch_interval = 2.0f; // Refresh every 2 seconds
+        float current_time = ImGui::GetTime();
+        if (server_cameras_.empty() || (current_time - last_server_camera_fetch_time_ > fetch_interval))
         {
-            ImGui::TextDisabled("Camera list unavailable.");
-            ImGui::EndTabItem();
-            return;
-        }
-
-        auto cameras = get_cameras_callback_();
-        std::vector<CameraInfo> server_cameras;
-        for (const auto &cam : cameras)
-        {
-            if (cam.via_server)
+            if (!server_camera_fetch_in_progress_ && async_worker_)
             {
-                server_cameras.push_back(cam);
+                server_camera_fetch_in_progress_ = true;
+                last_server_camera_fetch_time_ = current_time;
+                
+                std::string endpoint = std::string(server_endpoint_.data());
+                async_worker_->enqueueTask([this, endpoint]() {
+                    auto cameras = client_network::get_cameras_from_server(endpoint);
+                    server_cameras_ = cameras;
+                    server_camera_fetch_in_progress_ = false;
+                });
             }
         }
 
-        if (server_cameras.empty())
+        if (server_cameras_.empty())
         {
-            ImGui::TextDisabled("No cameras proxied through RichServer.");
-            ImGui::TextUnformatted("Add cameras via 'Add Camera' tab with 'Connect through RichServer' enabled.");
+            if (server_camera_fetch_in_progress_)
+            {
+                ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Loading cameras from server...");
+            }
+            else
+            {
+                ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "No cameras available on server");
+                ImGui::Text("Server endpoint: %s", server_endpoint_.data());
+            }
             ImGui::EndTabItem();
             return;
         }
 
         // Clamp selected index
-        if (selected_camera_index_ < 0 || selected_camera_index_ >= static_cast<int>(server_cameras.size()))
+        if (selected_camera_index_ < 0 || selected_camera_index_ >= static_cast<int>(server_cameras_.size()))
         {
             selected_camera_index_ = 0;
         }
 
         // Camera dropdown
         ImGui::Text("Select Camera:");
-        if (ImGui::BeginCombo("##camera_select", server_cameras[selected_camera_index_].name.c_str()))
+        
+        // Right-click on camera name for quick actions
+        if (ImGui::BeginPopupContextItem("##camera_text_context"))
         {
-            for (int i = 0; i < static_cast<int>(server_cameras.size()); ++i)
+            if (ImGui::MenuItem("Remove Camera"))
+            {
+                if (async_worker_)
+                {
+                    std::string camera_name = server_cameras_[selected_camera_index_].name;
+                    std::string endpoint = std::string(server_endpoint_.data());
+                    async_worker_->enqueueTask([camera_name, endpoint]() {
+                        client_network::remove_camera(endpoint, camera_name);
+                    });
+                    
+                    // Immediately reset selected index for instant UI feedback
+                    if (selected_camera_index_ > 0)
+                    {
+                        selected_camera_index_--;
+                    }
+                    else
+                    {
+                        selected_camera_index_ = 0;
+                    }
+                    
+                    // Force refresh on next frame
+                    last_server_camera_fetch_time_ = 0.0f;
+                }
+            }
+            ImGui::EndPopup();
+        }
+        
+        if (ImGui::BeginCombo("##camera_select", server_cameras_[selected_camera_index_].name.c_str()))
+        {
+            for (int i = 0; i < static_cast<int>(server_cameras_.size()); ++i)
             {
                 bool is_selected = (selected_camera_index_ == i);
-                if (ImGui::Selectable(server_cameras[i].name.c_str(), is_selected))
+                if (ImGui::Selectable(server_cameras_[i].name.c_str(), is_selected))
                 {
                     selected_camera_index_ = i;
                 }
@@ -471,17 +881,24 @@ void ConfigurationPanel::renderMotionFrameTab(bool set_selected)
                     {
                         if (async_worker_)
                         {
-                            std::string camera_name = server_cameras[i].name;
+                            std::string camera_name = server_cameras_[i].name;
                             std::string endpoint = std::string(server_endpoint_.data());
                             async_worker_->enqueueTask([camera_name, endpoint]() {
                                 client_network::remove_camera(endpoint, camera_name);
                             });
                             
-                            // Reset selected index if removing current selection
-                            if (i == selected_camera_index_)
+                            // Immediately reset selected index for instant UI feedback
+                            if (i == selected_camera_index_ && selected_camera_index_ > 0)
+                            {
+                                selected_camera_index_--;
+                            }
+                            else if (i == selected_camera_index_)
                             {
                                 selected_camera_index_ = 0;
                             }
+                            
+                            // Force refresh on next frame
+                            last_server_camera_fetch_time_ = 0.0f;
                         }
                     }
                     ImGui::EndPopup();
@@ -494,11 +911,20 @@ void ConfigurationPanel::renderMotionFrameTab(bool set_selected)
         ImGui::Separator();
         ImGui::Spacing();
 
-        const auto &selected_camera = server_cameras[selected_camera_index_];
+        const auto &selected_camera = server_cameras_[selected_camera_index_];
         bool motion_enabled = selected_camera.motion_enabled;
 
         // Motion toggle
         ImGui::Text("Motion Detection Status: %s", motion_enabled ? "Enabled" : "Disabled");
+        
+        ImGui::SameLine();
+        ImGui::Spacing();
+        ImGui::SameLine();
+        ImGui::PushItemWidth(150);
+        ImGui::SliderFloat("Frame Fetch Interval (s)", &motion_frame_fetch_interval_, 0.1f, 5.0f, "%.1f");
+        ImGui::PopItemWidth();
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("How often to fetch motion frames from the server (lower = more frequent)");
 
         bool toggled = false;
         if (motion_enabled)
@@ -581,15 +1007,77 @@ void ConfigurationPanel::renderMotionFrameTab(bool set_selected)
         {
             ImGui::Text("Motion Frame:");
 
-            // Fetch motion frame periodically (every 0.5 seconds)
+            // Fetch motion frame periodically using async network fetch
             float current_time = ImGui::GetTime();
-            if (current_time - last_motion_frame_fetch_ > 0.5f)
+            
+            // Process fetched JPEG data on main thread FIRST (decode + texture upload must be on main thread)
+            // This must happen before checking if we should start a new fetch, so timestamp is updated properly
+            if (has_pending_motion_frame_)
             {
-                if (fetch_motion_frame_callback_)
+                MOTION_FRAME_LOG("Main thread: Processing pending motion frame");
+                std::vector<unsigned char> jpeg_data_copy;
                 {
+                    std::lock_guard<std::mutex> lock(motion_frame_mutex_);
+                    has_pending_motion_frame_ = false;
+                    jpeg_data_copy = motion_frame_data_; // Copy the JPEG data
+                    MOTION_FRAME_LOG("Main thread: JPEG data size in buffer: " << jpeg_data_copy.size() << " bytes");
+                }
+                
+                // Decode JPEG and create/update SDL texture directly from buffered data
+                MOTION_FRAME_LOG("Main thread: Decoding JPEG from buffer (no re-fetch)");
+                decode_motion_frame_from_buffer_(jpeg_data_copy, motion_frame_texture_,
+                                                motion_frame_width_, motion_frame_height_);
+                
+                // Update timestamp AFTER decode completes (on main thread with valid ImGui::GetTime())
+                last_motion_frame_fetch_ = current_time;
+                MOTION_FRAME_LOG("Main thread: Decode complete, timestamp updated");
+            }
+            
+            // NOW check if we should start a new fetch (after processing any pending frame)
+            if (current_time - last_motion_frame_fetch_ > motion_frame_fetch_interval_)
+            {
+                if (!motion_frame_fetch_in_progress_ && motion_frame_worker_)
+                {
+                    MOTION_FRAME_LOG("Starting async fetch for camera: " << selected_camera.name 
+                                    << " (interval: " << motion_frame_fetch_interval_ << "s)");
+                    motion_frame_fetch_in_progress_ = true;
+                    // Don't update last_motion_frame_fetch_ here - will update after decode completes
+                    
+                    std::string camera_name = selected_camera.name;
+                    std::string endpoint(server_endpoint_.data());
+                    
+                    // Use dedicated motion frame worker (not shared with other async tasks)
+                    // This ensures motion frame fetching is never delayed by health checks, camera lists, etc.
+                    motion_frame_worker_->enqueueTask([this, camera_name, endpoint]() {
+                        MOTION_FRAME_LOG("Background thread: Fetching JPEG from network for " << camera_name);
+                        std::vector<unsigned char> jpeg_buffer;
+                        
+                        // Network I/O happens in background - doesn't block UI
+                        bool success = client_network::fetch_motion_frame_jpeg(endpoint, camera_name, jpeg_buffer);
+                        
+                        if (success && !jpeg_buffer.empty())
+                        {
+                            MOTION_FRAME_LOG("Background thread: JPEG fetch SUCCESS, size=" << jpeg_buffer.size() << " bytes");
+                            std::lock_guard<std::mutex> lock(motion_frame_mutex_);
+                            motion_frame_data_ = std::move(jpeg_buffer);
+                            has_pending_motion_frame_ = true;
+                        }
+                        else
+                        {
+                            MOTION_FRAME_LOG("Background thread: JPEG fetch FAILED");
+                        }
+                        
+                        motion_frame_fetch_in_progress_ = false;
+                        MOTION_FRAME_LOG("Background thread: Fetch complete");
+                    });
+                }
+                else if (!async_worker_ && fetch_motion_frame_callback_)
+                {
+                    MOTION_FRAME_LOG("Fallback: Synchronous fetch (no async worker)");
+                    // Fallback: no async worker available, do synchronous fetch
+                    last_motion_frame_fetch_ = current_time;
                     fetch_motion_frame_callback_(selected_camera.name, motion_frame_texture_,
                                                  motion_frame_width_, motion_frame_height_);
-                    last_motion_frame_fetch_ = current_time;
                 }
             }
 

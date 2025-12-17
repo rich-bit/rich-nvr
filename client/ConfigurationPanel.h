@@ -2,6 +2,7 @@
 
 #include <array>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -45,6 +46,14 @@ struct AddCameraResult {
     std::string message;
 };
 
+struct ProbeStreamResult {
+    bool success = false;
+    int width = 0;
+    int height = 0;
+    bool has_audio = false;
+    std::string error_message;
+};
+
 class ConfigurationPanel {
 public:
     enum class Tab {
@@ -70,6 +79,7 @@ public:
 
     using PersistCallback = std::function<void(const ConfigurationWindowSettings&)>;
     using AddCameraCallback = std::function<AddCameraResult(const AddCameraRequest&)>;
+    using ProbeStreamCallback = std::function<ProbeStreamResult(const std::string&)>;
     using ThreadInfoCallback = std::function<std::vector<ThreadInfo>()>;
     using ShowMetricsCallback = std::function<void(bool)>;
     
@@ -91,6 +101,7 @@ public:
     ConfigurationPanel(ConfigurationWindowSettings& window_settings,
                        PersistCallback persist_callback,
                        AddCameraCallback add_camera_callback,
+                       ProbeStreamCallback probe_stream_callback,
                        const std::string& default_server_endpoint,
                        ThreadInfoCallback thread_info_callback,
                        ShowMetricsCallback show_metrics_callback,
@@ -113,6 +124,10 @@ private:
     void renderAddCameraTab(bool set_selected);
     void renderMotionFrameTab(bool set_selected);
     void renderInfoTab(bool set_selected);
+    
+    // Helper to decode JPEG from buffer using global shared data
+    void decode_motion_frame_from_buffer_(const std::vector<unsigned char>& jpeg_buffer,
+                                          void*& texture_out, int& width_out, int& height_out);
 
     bool auto_reconnect_;
     bool show_fps_overlay_;
@@ -130,6 +145,15 @@ private:
     int motion_frame_width_;
     int motion_frame_height_;
     float last_motion_frame_fetch_;
+    bool motion_frame_fetch_in_progress_;
+    float motion_frame_fetch_interval_;
+    
+    // Motion frame data buffer (for async transfer)
+    std::vector<unsigned char> motion_frame_data_;
+    int pending_motion_frame_width_;
+    int pending_motion_frame_height_;
+    bool has_pending_motion_frame_;
+    mutable std::mutex motion_frame_mutex_;
     
     // Motion region drawing state
     bool drawing_motion_region_;
@@ -142,6 +166,7 @@ private:
     float last_region_fetch_time_;
     
     class AsyncNetworkWorker* async_worker_;
+    std::unique_ptr<class AsyncNetworkWorker> motion_frame_worker_;  // Dedicated worker for motion frames
 
     Tab active_tab_;
     Tab requested_tab_;
@@ -150,6 +175,7 @@ private:
     ConfigurationWindowSettings& window_settings_;
     PersistCallback persist_callback_;
     AddCameraCallback add_camera_callback_;
+    ProbeStreamCallback probe_stream_callback_;
     ThreadInfoCallback thread_info_callback_;
     ShowMetricsCallback show_metrics_callback_;
     GetCamerasCallback get_cameras_callback_;
@@ -181,6 +207,18 @@ private:
     bool add_camera_status_success_;
     std::string add_camera_status_;
     
+    // Probe stream state
+    bool probe_in_progress_;
+    ProbeStreamResult last_probe_result_;
+    
+    // Proxy initiation state
+    bool proxy_initiate_in_progress_;
+    bool proxy_initiated_successfully_;
+    std::string proxy_initiate_message_;
+    std::string proxied_rtsp_url_;
+    bool proxy_probe_in_progress_;
+    float last_proxy_probe_time_;
+    
     // Server health check state
     bool server_health_checking_;
     bool server_health_available_;
@@ -193,4 +231,12 @@ private:
     // Record on motion warning
     bool show_record_motion_warning_;
     bool dont_show_record_motion_warning_;
+    
+    // Window control
+    bool close_after_save_;
+    
+    // Server camera list for motion-frame tab
+    std::vector<CameraInfo> server_cameras_;
+    float last_server_camera_fetch_time_;
+    bool server_camera_fetch_in_progress_;
 };

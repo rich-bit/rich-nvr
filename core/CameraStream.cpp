@@ -39,13 +39,11 @@ CameraStream::CameraStream(
       video_output_format_(video_output_format)
 {
 
-  // Check if stream has audio
-  if (pr_.probed && pr_.has_audio)
-  {
-    ProbeRtspAudio(uri_, pr_, /*timeout_ms=*/1500);
-    std::cout << "[Camerastream CTR] Stream " << uri_ << " reports audio "
-              << pr_.has_audio << std::endl;
-  }
+  // Probe stream for audio
+  ProbeRtspAudio(uri_, pr_, /*timeout_ms=*/1500);
+  std::cout << "[CameraStream CTR] Stream " << uri_ 
+            << " probed: " << (pr_.probed ? "yes" : "no")
+            << ", has audio: " << (pr_.has_audio ? "yes" : "no") << std::endl;
 
   std::string base_dir = core::PathUtils::getExecutableDir();
   std::string safe_name = core::PathUtils::sanitizeCameraName(name);

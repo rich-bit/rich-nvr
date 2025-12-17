@@ -42,6 +42,13 @@ extern "C"
 
 // Global debug flags that can be set via command line
 bool g_audio_debug = false;
+bool g_grid_debug = false;
+bool g_motion_frame_debug = false;
+
+// Shared buffer for async motion frame fetching
+std::vector<unsigned char> g_prefetched_motion_frame_jpeg;
+bool g_use_prefetched_jpeg = false;
+std::mutex g_prefetched_jpeg_mutex;
 
 // Audio debug logging helper
 #define AUDIO_LOG(msg)                                   \
@@ -51,6 +58,31 @@ bool g_audio_debug = false;
         {                                                \
             std::cout << "[Audio] " << msg << std::endl; \
         }                                                \
+    } while (0)
+
+// Grid debug logging helper
+#define GRID_LOG(msg)                                    \
+    do                                                   \
+    {                                                    \
+        if (g_grid_debug)                                \
+        {                                                \
+            std::cout << "[Grid] " << msg << std::endl;  \
+        }                                                \
+    } while (0)
+
+// Motion-frame debug logging helper with timestamp
+#define MOTION_FRAME_LOG(msg)                                                          \
+    do                                                                                 \
+    {                                                                                  \
+        if (g_motion_frame_debug)                                                      \
+        {                                                                              \
+            auto now = std::chrono::steady_clock::now();                               \
+            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(           \
+                now.time_since_epoch()).count();                                       \
+            double seconds = (ms % 100000) / 1000.0;                                   \
+            std::cout << "[MotionFrame][" << std::fixed << std::setprecision(3)        \
+                      << seconds << "s] " << msg << std::endl;                         \
+        }                                                                              \
     } while (0)
 
 namespace
@@ -73,6 +105,15 @@ namespace
     constexpr std::chrono::milliseconds kStreamRetryInitialDelay{1500};
     constexpr std::chrono::seconds kStreamStallThreshold{5};
     constexpr std::chrono::seconds kStreamReadTimeout{5};
+
+    struct ProbeResult
+    {
+        bool success = false;
+        int width = 0;
+        int height = 0;
+        bool has_audio = false;
+        std::string error_message;
+    };
 
 } // namespace
 
@@ -170,6 +211,90 @@ static int ffmpeg_interrupt_callback(void *opaque)
     return 0;
 }
 
+namespace
+{
+    ProbeResult probe_rtsp_stream(const std::string &url, std::chrono::seconds timeout = std::chrono::seconds(5))
+    {
+        ProbeResult result;
+        
+        StreamInterruptContext interrupt_ctx;
+        AVFormatContext *fmt_ctx = avformat_alloc_context();
+        if (!fmt_ctx)
+        {
+            result.error_message = "Failed to allocate format context";
+            return result;
+        }
+        
+        fmt_ctx->interrupt_callback.callback = ffmpeg_interrupt_callback;
+        fmt_ctx->interrupt_callback.opaque = &interrupt_ctx;
+
+        AVDictionary *opts = nullptr;
+        av_dict_set(&opts, "rtsp_transport", "tcp", 0);
+        av_dict_set(&opts, "fflags", "nobuffer", 0);
+        av_dict_set(&opts, "max_delay", "500000", 0);
+        av_dict_set(&opts, "stimeout", "5000000", 0);  // 5 second timeout
+
+        interrupt_ctx.deadline = std::chrono::steady_clock::now() + timeout;
+        int open_result = avformat_open_input(&fmt_ctx, url.c_str(), nullptr, &opts);
+        av_dict_free(&opts);
+        
+        if (open_result < 0)
+        {
+            char errbuf[AV_ERROR_MAX_STRING_SIZE] = {};
+            av_strerror(open_result, errbuf, sizeof(errbuf));
+            result.error_message = std::string("Failed to open: ") + errbuf;
+            avformat_close_input(&fmt_ctx);
+            return result;
+        }
+
+        interrupt_ctx.deadline = std::chrono::steady_clock::now() + timeout;
+        if (avformat_find_stream_info(fmt_ctx, nullptr) < 0)
+        {
+            result.error_message = "Failed to find stream info";
+            avformat_close_input(&fmt_ctx);
+            return result;
+        }
+        interrupt_ctx.deadline = std::chrono::steady_clock::time_point{};
+
+        // Find video stream
+        int video_stream_index = -1;
+        int audio_stream_index = -1;
+        
+        for (unsigned i = 0; i < fmt_ctx->nb_streams; ++i)
+        {
+            AVStream *st = fmt_ctx->streams[i];
+            if (st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO && video_stream_index == -1)
+            {
+                video_stream_index = i;
+                result.width = st->codecpar->width;
+                result.height = st->codecpar->height;
+            }
+            else if (st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO && audio_stream_index == -1)
+            {
+                audio_stream_index = i;
+                result.has_audio = true;
+            }
+        }
+
+        avformat_close_input(&fmt_ctx);
+
+        if (video_stream_index == -1)
+        {
+            result.error_message = "No video stream found";
+            return result;
+        }
+
+        if (result.width <= 0 || result.height <= 0)
+        {
+            result.error_message = "Invalid video dimensions";
+            return result;
+        }
+
+        result.success = true;
+        return result;
+    }
+} // namespace
+
 struct VideoStreamCtx
 {
     AVFormatContext *fmt_ctx = nullptr;
@@ -219,10 +344,27 @@ int main(int argc, char **argv)
                 g_audio_debug = true;
                 std::cout << "[Debug] Audio debugging enabled" << std::endl;
             }
+            else if (debug_type == "grid")
+            {
+                g_grid_debug = true;
+                std::cout << "[Debug] Grid debugging enabled" << std::endl;
+            }
+            else if (debug_type == "all")
+            {
+                g_audio_debug = true;
+                g_grid_debug = true;
+                g_motion_frame_debug = true;
+                std::cout << "[Debug] All debugging enabled" << std::endl;
+            }
+            else if (debug_type == "motion-frame")
+            {
+                g_motion_frame_debug = true;
+                std::cout << "[Debug] Motion-frame debugging enabled" << std::endl;
+            }
             else
             {
                 std::cerr << "Unknown debug type: " << debug_type << std::endl;
-                std::cerr << "Available types: audio" << std::endl;
+                std::cerr << "Available types: audio, grid, motion-frame, all" << std::endl;
             }
         }
         else if (arg.find("rtsp://") == 0)
@@ -321,6 +463,8 @@ int main(int argc, char **argv)
         stream_urls[i] = stream_configs[i].ip;
         stream_names[i] = stream_configs[i].name.empty() ? kUnknownCameraName : stream_configs[i].name;
     }
+    
+    GRID_LOG("Initial config: stream_count=" << stream_count << ", GRID_COLS=" << GRID_COLS << ", GRID_ROWS=" << GRID_ROWS);
 
     ConfigurationWindowSettings window_settings = client_config.window_settings;
 
@@ -1078,18 +1222,43 @@ int main(int argc, char **argv)
     auto add_camera_handler = [&](const AddCameraRequest &request) -> AddCameraResult
     {
         AddCameraResult result;
+        
+        GRID_LOG("ADD CAMERA REQUEST: name='" << request.name << "', url='" << request.rtsp_url << "', via_server=" << request.connect_via_server);
+        GRID_LOG("Before add: stream_count=" << stream_count << ", streams.size()=" << streams.size() << ", stream_configs.size()=" << stream_configs.size());
 
         if (stream_configs.size() >= static_cast<size_t>(TOTAL_SLOTS))
         {
             result.success = false;
             result.message = "All grid slots are in use.";
+            GRID_LOG("ADD CAMERA FAILED: All slots in use");
             return result;
         }
         if (request.rtsp_url.empty())
         {
             result.success = false;
             result.message = "RTSP address is required.";
+            GRID_LOG("ADD CAMERA FAILED: Empty RTSP URL");
             return result;
+        }
+
+        // Probe the stream first to get dimensions (for direct connections only)
+        ProbeResult probe_result;
+        if (!request.connect_via_server)
+        {
+            GRID_LOG("Probing direct stream: " << request.rtsp_url);
+            probe_result = probe_rtsp_stream(request.rtsp_url);
+            if (!probe_result.success)
+            {
+                std::cerr << "Failed to probe stream '" << request.rtsp_url << "': " << probe_result.error_message << "\n";
+                result.success = false;
+                result.message = "Failed to probe stream: " + probe_result.error_message;
+                GRID_LOG("ADD CAMERA FAILED: Probe failed - " << probe_result.error_message);
+                return result;
+            }
+            std::cout << "Probe successful for '" << request.rtsp_url << "': " 
+                      << probe_result.width << "x" << probe_result.height 
+                      << ", audio=" << (probe_result.has_audio ? "yes" : "no") << "\n";
+            GRID_LOG("Probe successful: " << probe_result.width << "x" << probe_result.height << ", audio=" << probe_result.has_audio);
         }
 
         CameraConfig camera;
@@ -1119,26 +1288,43 @@ int main(int argc, char **argv)
                 return result;
             }
 
-            std::string response_body;
-            auto network_result = send_add_camera_request(request, response_body);
-            if (!network_result.success)
+            // Check if the URL is already a proxied stream (contains the server endpoint)
+            // If so, skip the add_camera request since the proxy is already set up
+            bool is_already_proxied = false;
+            if (request.live555_proxy)
             {
+                std::string expected_proxy = build_proxy_rtsp_url(request.server_endpoint, request.name);
+                if (!expected_proxy.empty() && request.rtsp_url == expected_proxy)
+                {
+                    is_already_proxied = true;
+                    status_message = "Connected to proxied stream.";
+                    GRID_LOG("URL is already proxied, skipping add_camera request");
+                }
+            }
+
+            if (!is_already_proxied)
+            {
+                std::string response_body;
+                auto network_result = send_add_camera_request(request, response_body);
+                if (!network_result.success)
+                {
+                    status_message = network_result.message;
+                    trim_in_place(status_message);
+                    if (status_message.empty())
+                    {
+                        status_message = "Failed to add camera via RichServer.";
+                    }
+                    result.success = false;
+                    result.message = status_message;
+                    return result;
+                }
+
                 status_message = network_result.message;
                 trim_in_place(status_message);
                 if (status_message.empty())
                 {
-                    status_message = "Failed to add camera via RichServer.";
+                    status_message = "Camera added via RichServer.";
                 }
-                result.success = false;
-                result.message = status_message;
-                return result;
-            }
-
-            status_message = network_result.message;
-            trim_in_place(status_message);
-            if (status_message.empty())
-            {
-                status_message = "Camera added via RichServer.";
             }
 
             camera.name = display_name;
@@ -1204,6 +1390,37 @@ int main(int argc, char **argv)
         }
 
         int new_index = stream_count;
+        GRID_LOG("New camera will be at index: " << new_index);
+
+        // Pre-resize canvas if we have dimensions from probe (direct connections only)
+        if (!request.connect_via_server && probe_result.success && probe_result.width > 0 && probe_result.height > 0)
+        {
+            GRID_LOG("Pre-resizing canvas for probed dimensions: " << probe_result.width << "x" << probe_result.height);
+            
+            // Update reference dimensions if needed
+            if (!reference_dimensions_ready || single_w != probe_result.width || single_h != probe_result.height)
+            {
+                single_w = probe_result.width;
+                single_h = probe_result.height;
+                reference_dimensions_ready = true;
+                
+                if (ensure_canvas_dimensions)
+                {
+                    if (!ensure_canvas_dimensions(single_w, single_h, placeholder_dimensions))
+                    {
+                        GRID_LOG("Pre-resize canvas FAILED");
+                    }
+                    else
+                    {
+                        GRID_LOG("Pre-resize canvas SUCCESS: " << canvas_w << "x" << canvas_h << " (cell: " << single_w << "x" << single_h << ")");
+                    }
+                }
+            }
+            else
+            {
+                GRID_LOG("Canvas already correct size from previous streams");
+            }
+        }
 
         stream_configs.push_back(camera);
         stream_urls.push_back(camera.ip);
@@ -1214,20 +1431,30 @@ int main(int argc, char **argv)
         stream_last_frame_times.push_back(std::chrono::steady_clock::time_point{});
         stream_stall_reported.push_back(false);
         stream_count = static_cast<int>(stream_configs.size());
+        
+        GRID_LOG("After vector updates: stream_count=" << stream_count << ", streams.size()=" << streams.size());
+        GRID_LOG("Attempting to open stream at: " << stream_urls[new_index]);
 
         bool opened_immediately = open_stream(new_index, stream_urls[new_index], new_index == 0);
+        GRID_LOG("open_stream returned: " << (opened_immediately ? "true" : "false"));
         if (!opened_immediately)
         {
             release_stream(streams[new_index]);
+            
             if (request.connect_via_server)
             {
+                // DO NOT resize canvas for failed streams - just schedule retry
+                // The canvas will be properly sized when the stream successfully opens
+                
                 schedule_stream_retry(new_index, kStreamRetryInitialDelay);
                 status_message = "Camera registered. Waiting for stream to become available...";
                 result.success = true;
                 result.message = status_message;
+                GRID_LOG("ADD CAMERA: Stream not available, scheduled for retry (canvas NOT resized)");
             }
             else
             {
+                GRID_LOG("ADD CAMERA ROLLBACK: Removing failed direct stream");
                 streams.pop_back();
                 overlay_always_show_stream.pop_back();
                 stream_retry_deadlines.pop_back();
@@ -1240,12 +1467,15 @@ int main(int argc, char **argv)
 
                 result.success = false;
                 result.message = "Failed to open new stream locally.";
+                GRID_LOG("After rollback: stream_count=" << stream_count << ", streams.size()=" << streams.size());
                 return result;
             }
         }
         else
         {
+            GRID_LOG("ADD CAMERA: Stream opened successfully");
             record_stream_open(new_index);
+            
             if (new_index == 0)
             {
                 if (!configure_audio(streams[0]))
@@ -1253,14 +1483,67 @@ int main(int argc, char **argv)
                     std::cerr << "Failed to configure audio for new stream" << "\n";
                 }
             }
-            if (ensure_canvas_dimensions && streams[new_index].vctx)
+            
+            // Canvas should already be sized from probe (for direct connections)
+            // For via_server connections, we need to resize now
+            if (ensure_canvas_dimensions && streams[new_index].vctx && 
+                streams[new_index].vctx->width > 0 && streams[new_index].vctx->height > 0)
             {
-                if (!ensure_canvas_dimensions(streams[new_index].vctx->width, streams[new_index].vctx->height, placeholder_dimensions))
+                int stream_w = streams[new_index].vctx->width;
+                int stream_h = streams[new_index].vctx->height;
+                
+                // Check if dimensions differ from what we expect
+                if (!request.connect_via_server && probe_result.success)
                 {
-                    std::cerr << "Failed to resize canvas for new stream." << "\n";
+                    // Direct connection - should match probe
+                    if (stream_w != single_w || stream_h != single_h)
+                    {
+                        GRID_LOG("WARNING: Stream dimensions differ from probe! Stream: " << stream_w << "x" << stream_h << ", Expected: " << single_w << "x" << single_h);
+                        GRID_LOG("Resizing canvas to match actual stream");
+                        if (!ensure_canvas_dimensions(stream_w, stream_h, false))
+                        {
+                            std::cerr << "Failed to resize canvas for new stream." << "\n";
+                            GRID_LOG("Canvas resize FAILED");
+                        }
+                        else
+                        {
+                            GRID_LOG("Canvas resized: " << canvas_w << "x" << canvas_h << " (cell: " << single_w << "x" << single_h << ")");
+                        }
+                    }
+                    else
+                    {
+                        GRID_LOG("Stream dimensions match probe, canvas already sized correctly");
+                    }
+                }
+                else
+                {
+                    // Via server connection - need to resize now
+                    bool need_resize = !reference_dimensions_ready || 
+                                      stream_w != single_w || 
+                                      stream_h != single_h;
+                    
+                    if (need_resize)
+                    {
+                        GRID_LOG("Resizing canvas for via_server stream: " << stream_w << "x" << stream_h);
+                        if (!ensure_canvas_dimensions(stream_w, stream_h, placeholder_dimensions))
+                        {
+                            std::cerr << "Failed to resize canvas for new stream." << "\n";
+                            GRID_LOG("Canvas resize FAILED");
+                        }
+                        else
+                        {
+                            GRID_LOG("Canvas resized successfully: " << canvas_w << "x" << canvas_h << " (cell: " << single_w << "x" << single_h << ")");
+                        }
+                    }
+                    else
+                    {
+                        GRID_LOG("Canvas dimensions unchanged, no resize needed");
+                    }
                 }
             }
+            
             start_stream_worker(new_index);
+            GRID_LOG("Worker started for stream " << new_index);
         }
 
         bool persisted = persist_config();
@@ -1358,26 +1641,48 @@ int main(int argc, char **argv)
     auto fetch_motion_frame_callback = [&](const std::string &camera_name, void *&texture_out,
                                            int &width_out, int &height_out) -> bool
     {
+        MOTION_FRAME_LOG("fetch_motion_frame_callback called for camera: " << camera_name);
+        
         if (!renderer)
         {
+            MOTION_FRAME_LOG("ERROR: No renderer available");
             return false;
         }
 
-        if (!client_network::fetch_motion_frame_jpeg(client_config.server_endpoint, camera_name, motion_frame_jpeg_buffer))
+        // Check if we should use prefetched JPEG data (from async fetch)
         {
-            return false;
+            std::lock_guard<std::mutex> lock(g_prefetched_jpeg_mutex);
+            if (g_use_prefetched_jpeg && !g_prefetched_motion_frame_jpeg.empty())
+            {
+                MOTION_FRAME_LOG("Using pre-fetched JPEG buffer, size: " << g_prefetched_motion_frame_jpeg.size() << " bytes (no network fetch)");
+                motion_frame_jpeg_buffer = g_prefetched_motion_frame_jpeg;
+                g_prefetched_motion_frame_jpeg.clear();
+            }
+            else
+            {
+                MOTION_FRAME_LOG("Fetching JPEG from server...");
+                if (!client_network::fetch_motion_frame_jpeg(client_config.server_endpoint, camera_name, motion_frame_jpeg_buffer))
+                {
+                    MOTION_FRAME_LOG("ERROR: Failed to fetch JPEG from server");
+                    return false;
+                }
+                MOTION_FRAME_LOG("JPEG fetched, size: " << motion_frame_jpeg_buffer.size() << " bytes");
+            }
         }
 
         if (motion_frame_jpeg_buffer.empty())
         {
+            MOTION_FRAME_LOG("ERROR: JPEG buffer is empty");
             return false;
         }
 
         // Use FFmpeg to decode JPEG
+        MOTION_FRAME_LOG("Starting JPEG decode...");
         AVCodecID codec_id = AV_CODEC_ID_MJPEG;
         const AVCodec *codec = avcodec_find_decoder(codec_id);
         if (!codec)
         {
+            MOTION_FRAME_LOG("ERROR: Failed to find MJPEG decoder");
             return false;
         }
 
@@ -1489,12 +1794,14 @@ int main(int argc, char **argv)
                   rgb_frame->data, rgb_frame->linesize);
 
         // Check if texture needs to be recreated (different dimensions)
+        MOTION_FRAME_LOG("Decoded frame size: " << frame->width << "x" << frame->height);
         if (motion_frame_texture)
         {
             int existing_w = 0, existing_h = 0;
             SDL_QueryTexture(motion_frame_texture, nullptr, nullptr, &existing_w, &existing_h);
             if (existing_w != frame->width || existing_h != frame->height)
             {
+                MOTION_FRAME_LOG("Destroying old texture (dimension change)");
                 SDL_DestroyTexture(motion_frame_texture);
                 motion_frame_texture = nullptr;
             }
@@ -1503,6 +1810,7 @@ int main(int argc, char **argv)
         // Create SDL texture if needed
         if (!motion_frame_texture)
         {
+            MOTION_FRAME_LOG("Creating new SDL texture: " << frame->width << "x" << frame->height);
             motion_frame_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGB24,
                                                      SDL_TEXTUREACCESS_STATIC, frame->width, frame->height);
         }
@@ -1510,6 +1818,7 @@ int main(int argc, char **argv)
         bool success = false;
         if (motion_frame_texture)
         {
+            MOTION_FRAME_LOG("Updating SDL texture with RGB data...");
             int update_ret = SDL_UpdateTexture(motion_frame_texture, nullptr, rgb_buffer, rgb_frame->linesize[0]);
             if (update_ret == 0)
             {
@@ -1517,14 +1826,21 @@ int main(int argc, char **argv)
                 width_out = frame->width;
                 height_out = frame->height;
                 success = true;
+                MOTION_FRAME_LOG("SUCCESS: Texture updated successfully");
             }
             else
             {
+                MOTION_FRAME_LOG("ERROR: SDL_UpdateTexture failed: " << SDL_GetError());
                 SDL_DestroyTexture(motion_frame_texture);
                 motion_frame_texture = nullptr;
             }
         }
+        else
+        {
+            MOTION_FRAME_LOG("ERROR: Failed to create SDL texture");
+        }
 
+        MOTION_FRAME_LOG("Cleaning up FFmpeg resources");
         av_free(rgb_buffer);
         av_frame_free(&rgb_frame);
         sws_freeContext(sws_ctx);
@@ -1532,6 +1848,7 @@ int main(int argc, char **argv)
         av_frame_free(&frame);
         avcodec_free_context(&codec_ctx);
 
+        MOTION_FRAME_LOG("Callback complete, success=" << (success ? "true" : "false"));
         return success;
     };
 
@@ -1558,8 +1875,35 @@ int main(int argc, char **argv)
     // Create async network worker for non-blocking network operations
     AsyncNetworkWorker async_network_worker;
 
+    auto probe_stream_handler = [&](const std::string &url) -> ProbeStreamResult
+    {
+        GRID_LOG("PROBE STREAM: " << url);
+        auto probe = probe_rtsp_stream(url);
+        
+        ProbeStreamResult result;
+        result.success = probe.success;
+        result.width = probe.width;
+        result.height = probe.height;
+        result.has_audio = probe.has_audio;
+        result.error_message = probe.error_message;
+        
+        if (result.success)
+        {
+            std::cout << "Probe successful: " << result.width << "x" << result.height 
+                      << ", audio=" << (result.has_audio ? "yes" : "no") << "\n";
+            GRID_LOG("PROBE SUCCESS: " << result.width << "x" << result.height << ", audio=" << result.has_audio);
+        }
+        else
+        {
+            std::cerr << "Probe failed: " << result.error_message << "\n";
+            GRID_LOG("PROBE FAILED: " << result.error_message);
+        }
+        
+        return result;
+    };
+
     ConfigurationPanel configuration_panel(window_settings, persist_window_settings, add_camera_handler,
-                                           client_config.server_endpoint, nullptr, show_metrics_callback,
+                                           probe_stream_handler, client_config.server_endpoint, nullptr, show_metrics_callback,
                                            get_cameras_callback, toggle_motion_callback, fetch_motion_frame_callback,
                                            add_motion_region_callback, remove_motion_region_callback,
                                            clear_motion_regions_callback, get_motion_regions_callback);
@@ -1572,6 +1916,7 @@ int main(int argc, char **argv)
 
     for (int i = 0; i < stream_count; ++i)
     {
+        GRID_LOG("Opening stream " << i << " (" << stream_names[i] << "): " << stream_urls[i]);
         bool opened = false;
         for (int attempt = 0; attempt < kStartupRetryAttempts && !opened; ++attempt)
         {
@@ -1586,14 +1931,18 @@ int main(int argc, char **argv)
         if (opened)
         {
             record_stream_open(i);
+            GRID_LOG("Stream " << i << " opened successfully");
         }
         else
         {
             std::cerr << "Stream " << i << " (" << stream_names[i] << ") not available after " << kStartupRetryAttempts << " attempts. Will retry periodically.\n";
             release_stream(streams[i]);
             schedule_stream_retry(i, kStreamRetryInitialDelay);
+            GRID_LOG("Stream " << i << " failed to open, scheduled for retry");
         }
     }
+    
+    GRID_LOG("After startup: stream_count=" << stream_count << ", streams.size()=" << streams.size());
 
     if (!reference_dimensions_ready)
     {
@@ -1619,6 +1968,8 @@ int main(int argc, char **argv)
     // --- SDL Video: one big canvas ---
     canvas_w = std::max(single_w, 1) * GRID_COLS;
     canvas_h = std::max(single_h, 1) * GRID_ROWS;
+    
+    GRID_LOG("Canvas dimensions: " << canvas_w << "x" << canvas_h << " (cell: " << single_w << "x" << single_h << ", placeholder=" << placeholder_dimensions << ")");
 
     win = SDL_CreateWindow(
         "RTSP Grid Player",
@@ -1680,16 +2031,28 @@ int main(int argc, char **argv)
 
         int target_canvas_w = desired_single_w * GRID_COLS;
         int target_canvas_h = desired_single_h * GRID_ROWS;
+        
+        // Don't skip resize if we're not forcing and dimensions match - we still need to
+        // ensure the canvas buffer is properly allocated for the current stream count
         if (!force && desired_single_w == single_w && desired_single_h == single_h && texture &&
-            canvas_w == target_canvas_w && canvas_h == target_canvas_h)
+            canvas_w == target_canvas_w && canvas_h == target_canvas_h && 
+            !canvas_buffer.empty() && canvas_linesize[0] > 0)
         {
-            return true;
+            // Verify canvas buffer is actually valid before returning early
+            int expected_bytes = av_image_get_buffer_size(AV_PIX_FMT_RGB24, canvas_w, canvas_h, 1);
+            if (static_cast<int>(canvas_buffer.size()) == expected_bytes)
+            {
+                return true;
+            }
+            GRID_LOG("Canvas buffer size mismatch, forcing resize");
         }
 
         single_w = desired_single_w;
         single_h = desired_single_h;
         canvas_w = target_canvas_w;
         canvas_h = target_canvas_h;
+        
+        GRID_LOG("Resizing canvas to: " << canvas_w << "x" << canvas_h << " (cell: " << single_w << "x" << single_h << ")");
 
         int bytes = av_image_get_buffer_size(AV_PIX_FMT_RGB24, canvas_w, canvas_h, 1);
         if (bytes <= 0)
@@ -1722,6 +2085,8 @@ int main(int argc, char **argv)
         std::fill(canvas_buffer.begin(), canvas_buffer.end(), 0);
         adjust_window_to_canvas(force);
         placeholder_dimensions = false;
+        
+        GRID_LOG("Canvas resize complete: " << canvas_w << "x" << canvas_h);
         return true;
     };
 
@@ -2166,17 +2531,8 @@ int main(int argc, char **argv)
                     remove_camera_requested = context_stream_index;
                     show_context_menu = false;
                 }
-                // Motion-frame only enabled if at least one camera is proxied through server
-                bool has_server_camera = false;
-                for (int i = 0; i < stream_count; ++i)
-                {
-                    if (i < static_cast<int>(stream_configs.size()) && stream_configs[i].via_server)
-                    {
-                        has_server_camera = true;
-                        break;
-                    }
-                }
-                if (ImGui::MenuItem("Motion-frame", nullptr, false, has_server_camera))
+                // Motion Frames menu item (always enabled)
+                if (ImGui::MenuItem("Motion Frames"))
                 {
                     show_configuration_panel = true;
                     configuration_panel.requestTab(ConfigurationPanel::Tab::MotionFrame);
@@ -2714,6 +3070,8 @@ int main(int argc, char **argv)
             int idx = remove_camera_requested;
             std::string camera_name = stream_configs[idx].name;
             bool via_server = stream_configs[idx].via_server;
+            
+            GRID_LOG("REMOVE CAMERA: idx=" << idx << ", name=" << camera_name << ", stream_count=" << stream_count << ", streams.size()=" << streams.size());
 
             // Signal worker to stop (don't wait/join - avoid blocking main thread)
             streams[idx].worker_stop.store(true);
@@ -2739,6 +3097,8 @@ int main(int argc, char **argv)
             
             // Update stream count
             stream_count = static_cast<int>(stream_configs.size());
+            
+            GRID_LOG("After removal: stream_count=" << stream_count << ", stream_configs.size()=" << stream_configs.size() << ", streams.size()=" << streams.size());
 
             // Persist config immediately
             persist_config();
@@ -2785,9 +3145,12 @@ int main(int argc, char **argv)
 
             if (reload_all_requested)
             {
+                GRID_LOG("RELOAD ALL: stream_count=" << stream_count << ", streams.size()=" << streams.size());
+                
                 std::fill(canvas_buffer.begin(), canvas_buffer.end(), 0);
                 
                 // Release all existing streams (this will wait for workers to finish)
+                GRID_LOG("Releasing " << streams.size() << " existing streams...");
                 for (auto &stream : streams)
                 {
                     release_stream(stream);
@@ -2796,24 +3159,32 @@ int main(int argc, char **argv)
                 // Reinitialize streams deque to match the new stream_count
                 streams.clear();
                 streams.resize(stream_count);
+                GRID_LOG("Streams deque resized to: " << stream_count);
                 
                 bool stream0_reopened = false;
                 std::vector<int> streams_to_restart;
                 streams_to_restart.reserve(stream_count);
                 for (int i = 0; i < stream_count; ++i)
                 {
+                    GRID_LOG("Reloading stream " << i << ": " << stream_urls[i]);
                     if (!open_stream(i, stream_urls[i], i == 0))
                     {
                         std::cerr << "Failed to reload stream: " << stream_urls[i] << "\n";
                         schedule_stream_retry(i, kStreamRetryInitialDelay);
+                        GRID_LOG("Stream " << i << " failed, scheduled for retry");
                         continue; // Don't break - try to open remaining streams
                     }
                     record_stream_open(i);
                     if (ensure_canvas_dimensions && streams[i].vctx)
                     {
+                        GRID_LOG("Stream " << i << " dimensions: " << streams[i].vctx->width << "x" << streams[i].vctx->height);
                         if (!ensure_canvas_dimensions(streams[i].vctx->width, streams[i].vctx->height, placeholder_dimensions))
                         {
                             std::cerr << "Failed to resize canvas during reload (all)." << "\n";
+                        }
+                        else
+                        {
+                            GRID_LOG("Canvas resized: " << canvas_w << "x" << canvas_h << " (cell: " << single_w << "x" << single_h << ")");
                         }
                     }
                     streams_to_restart.push_back(i);
@@ -2826,7 +3197,10 @@ int main(int argc, char **argv)
                 if (stream_count == 0)
                 {
                     placeholder_dimensions = true;
+                    GRID_LOG("No streams remaining, using placeholder dimensions");
                 }
+                
+                GRID_LOG("Reload complete: stream_count=" << stream_count << ", streams_to_restart.size()=" << streams_to_restart.size());
                 
                 if (need_audio_reset && stream0_reopened && stream_count > 0)
                 {
