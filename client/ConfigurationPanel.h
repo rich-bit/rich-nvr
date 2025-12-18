@@ -117,6 +117,9 @@ public:
     void requestTab(Tab tab);
     void setThreadInfoCallback(ThreadInfoCallback callback);
     void setAsyncWorker(class AsyncNetworkWorker* worker) { async_worker_ = worker; }
+    
+    // Public accessor for motion frame worker (for thread info display)
+    class AsyncNetworkWorker* getMotionFrameWorker() const { return motion_frame_worker_.get(); }
 
 private:
     void renderGeneralTab(bool set_selected);

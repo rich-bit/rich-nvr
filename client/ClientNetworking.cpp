@@ -5,8 +5,11 @@
 #include <chrono>
 #include <iomanip>
 #include <iostream>
+#include <memory>
+#include <mutex>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 
 #include <httplib.h>
 #include <nlohmann/json.hpp>
@@ -17,6 +20,13 @@ static constexpr bool DEBUG_MOTION_FRAME = false;
 
 namespace client_network {
 namespace {
+
+// HTTP client cache for connection reuse and DNS resolution caching
+static std::mutex client_cache_mutex;
+static std::unordered_map<std::string, std::shared_ptr<httplib::Client>> client_cache;
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+static std::unordered_map<std::string, std::shared_ptr<httplib::SSLClient>> ssl_client_cache;
+#endif
 
 std::string sanitize_camera_name(const std::string &name) {
     std::string safe;
@@ -131,6 +141,67 @@ std::string format_float(float value) {
     return oss.str();
 }
 
+// Normalize endpoint to use 127.0.0.1 instead of localhost on Windows
+std::string normalize_endpoint_for_cache(const std::string& host) {
+    #ifdef _WIN32
+    if (host == "localhost") {
+        return "127.0.0.1";
+    }
+    #endif
+    return host;
+}
+
+// Get or create a cached HTTP client for an endpoint
+std::shared_ptr<httplib::Client> get_or_create_client(const std::string &host, int port) {
+    // Normalize localhost to 127.0.0.1 on Windows before caching
+    std::string normalized_host = normalize_endpoint_for_cache(host);
+    std::string cache_key = normalized_host + ":" + std::to_string(port);
+    
+    std::lock_guard<std::mutex> lock(client_cache_mutex);
+    
+    auto it = client_cache.find(cache_key);
+    if (it != client_cache.end()) {
+        return it->second;
+    }
+    
+    // Create new client with keep-alive enabled and default timeouts
+    auto client = std::make_shared<httplib::Client>(normalized_host, port);
+    client->set_keep_alive(true);
+    client->set_connection_timeout(5, 0);
+    client->set_read_timeout(5, 0);
+    client->set_write_timeout(5, 0);
+    client_cache[cache_key] = client;
+    
+    return client;
+}
+
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+// Get or create a cached HTTPS client for an endpoint
+std::shared_ptr<httplib::SSLClient> get_or_create_ssl_client(const std::string &host, int port) {
+    // Normalize localhost to 127.0.0.1 on Windows before caching
+    std::string normalized_host = normalize_endpoint_for_cache(host);
+    std::string cache_key = normalized_host + ":" + std::to_string(port);
+    
+    std::lock_guard<std::mutex> lock(client_cache_mutex);
+    
+    auto it = ssl_client_cache.find(cache_key);
+    if (it != ssl_client_cache.end()) {
+        return it->second;
+    }
+    
+    // Create new SSL client with keep-alive enabled and default timeouts
+    auto client = std::make_shared<httplib::SSLClient>(normalized_host, port);
+    client->set_keep_alive(true);
+    client->set_connection_timeout(5, 0);
+    client->set_read_timeout(5, 0);
+    client->set_write_timeout(5, 0);
+    client->enable_server_certificate_verification(false);
+    ssl_client_cache[cache_key] = client;
+    
+    return client;
+}
+#endif
+
 } // namespace
 
 std::string extract_host_from_endpoint(const std::string &endpoint) {
@@ -234,15 +305,15 @@ AddCameraResult send_add_camera_request(const AddCameraRequest &request, std::st
 
     std::string path = join_paths(parts.base_path, "add_camera");
 
-    auto perform_request = [&](auto &client_impl) -> AddCameraResult {
+    auto perform_request = [&](auto client_ptr) -> AddCameraResult {
         AddCameraResult inner_result;
         inner_result.success = false;
 
-        client_impl.set_read_timeout(10, 0);
-        client_impl.set_write_timeout(10, 0);
-        client_impl.set_follow_location(true);
+        client_ptr->set_read_timeout(10, 0);
+        client_ptr->set_write_timeout(10, 0);
+        client_ptr->set_follow_location(true);
 
-        auto res = client_impl.Post(path.c_str(), params);
+        auto res = client_ptr->Post(path.c_str(), params);
         if (!res) {
             inner_result.message = "Request failed";
             inner_result.message += ": ";
@@ -264,9 +335,8 @@ AddCameraResult send_add_camera_request(const AddCameraRequest &request, std::st
 
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
     if (parts.scheme == "https") {
-        httplib::SSLClient client_impl(parts.host, parts.port);
-        client_impl.enable_server_certificate_verification(false);
-        return perform_request(client_impl);
+        auto client_ptr = get_or_create_ssl_client(parts.host, parts.port);
+        return perform_request(client_ptr);
     }
 #else
     if (parts.scheme == "https") {
@@ -280,8 +350,8 @@ AddCameraResult send_add_camera_request(const AddCameraRequest &request, std::st
         return result;
     }
 
-    httplib::Client client_impl(parts.host, parts.port);
-    return perform_request(client_impl);
+    auto client_ptr = get_or_create_client(parts.host, parts.port);
+    return perform_request(client_ptr);
 }
 
 bool toggle_motion_detection(const std::string &endpoint, const std::string &camera_name, bool enable) {
@@ -296,11 +366,11 @@ bool toggle_motion_detection(const std::string &endpoint, const std::string &cam
 
     std::string path = join_paths(parts.base_path, "toggle_motion");
 
-    auto perform_request = [&](auto &client_impl) -> bool {
-        client_impl.set_read_timeout(5, 0);
-        client_impl.set_write_timeout(5, 0);
+    auto perform_request = [&](auto client_ptr) -> bool {
+        client_ptr->set_read_timeout(5, 0);
+        client_ptr->set_write_timeout(5, 0);
 
-        auto res = client_impl.Post(path.c_str(), params);
+        auto res = client_ptr->Post(path.c_str(), params);
         if (!res) {
             return false;
         }
@@ -310,9 +380,8 @@ bool toggle_motion_detection(const std::string &endpoint, const std::string &cam
 
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
     if (parts.scheme == "https") {
-        httplib::SSLClient client_impl(parts.host, parts.port);
-        client_impl.enable_server_certificate_verification(false);
-        return perform_request(client_impl);
+        auto client_ptr = get_or_create_ssl_client(parts.host, parts.port);
+        return perform_request(client_ptr);
     }
 #endif
 
@@ -320,8 +389,8 @@ bool toggle_motion_detection(const std::string &endpoint, const std::string &cam
         return false;
     }
 
-    httplib::Client client_impl(parts.host, parts.port);
-    return perform_request(client_impl);
+    auto client_ptr = get_or_create_client(parts.host, parts.port);
+    return perform_request(client_ptr);
 }
 
 bool fetch_motion_frame_jpeg(const std::string &endpoint, const std::string &camera_name, std::vector<unsigned char> &jpeg_data) {
@@ -333,11 +402,11 @@ bool fetch_motion_frame_jpeg(const std::string &endpoint, const std::string &cam
     std::string path = join_paths(parts.base_path, "motion_frame");
     path += "?name=" + camera_name;
 
-    auto perform_request = [&](auto &client_impl) -> bool {
-        client_impl.set_read_timeout(5, 0);
-        client_impl.set_write_timeout(5, 0);
+    auto perform_request = [&](auto client_ptr) -> bool {
+        client_ptr->set_read_timeout(5, 0);
+        client_ptr->set_write_timeout(5, 0);
 
-        auto res = client_impl.Get(path.c_str());
+        auto res = client_ptr->Get(path.c_str());
         if (!res) {
             return false;
         }
@@ -352,9 +421,8 @@ bool fetch_motion_frame_jpeg(const std::string &endpoint, const std::string &cam
 
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
     if (parts.scheme == "https") {
-        httplib::SSLClient client_impl(parts.host, parts.port);
-        client_impl.enable_server_certificate_verification(false);
-        return perform_request(client_impl);
+        auto client_ptr = get_or_create_ssl_client(parts.host, parts.port);
+        return perform_request(client_ptr);
     }
 #endif
 
@@ -362,8 +430,8 @@ bool fetch_motion_frame_jpeg(const std::string &endpoint, const std::string &cam
         return false;
     }
 
-    httplib::Client client_impl(parts.host, parts.port);
-    return perform_request(client_impl);
+    auto client_ptr = get_or_create_client(parts.host, parts.port);
+    return perform_request(client_ptr);
 }
 
 int add_motion_region(const std::string &endpoint, const std::string &camera_name, int x, int y, int w, int h, float angle) {
@@ -384,11 +452,11 @@ int add_motion_region(const std::string &endpoint, const std::string &camera_nam
 
     std::string path = join_paths(parts.base_path, "add_motion_region");
 
-    auto perform_request = [&](auto &client_impl) -> int {
-        client_impl.set_read_timeout(5, 0);
-        client_impl.set_write_timeout(5, 0);
+    auto perform_request = [&](auto client_ptr) -> int {
+        client_ptr->set_read_timeout(5, 0);
+        client_ptr->set_write_timeout(5, 0);
 
-        auto res = client_impl.Post(path.c_str(), params);
+        auto res = client_ptr->Post(path.c_str(), params);
         if (!res || res->status != 200) {
             return -1;
         }
@@ -406,9 +474,8 @@ int add_motion_region(const std::string &endpoint, const std::string &camera_nam
 
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
     if (parts.scheme == "https") {
-        httplib::SSLClient client_impl(parts.host, parts.port);
-        client_impl.enable_server_certificate_verification(false);
-        return perform_request(client_impl);
+        auto client_ptr = get_or_create_ssl_client(parts.host, parts.port);
+        return perform_request(client_ptr);
     }
 #endif
 
@@ -416,8 +483,8 @@ int add_motion_region(const std::string &endpoint, const std::string &camera_nam
         return -1;
     }
 
-    httplib::Client client_impl(parts.host, parts.port);
-    return perform_request(client_impl);
+    auto client_ptr = get_or_create_client(parts.host, parts.port);
+    return perform_request(client_ptr);
 }
 
 bool remove_motion_region(const std::string &endpoint, const std::string &camera_name, int region_id) {
@@ -432,19 +499,18 @@ bool remove_motion_region(const std::string &endpoint, const std::string &camera
 
     std::string path = join_paths(parts.base_path, "remove_motion_region");
 
-    auto perform_request = [&](auto &client_impl) -> bool {
-        client_impl.set_read_timeout(5, 0);
-        client_impl.set_write_timeout(5, 0);
+    auto perform_request = [&](auto client_ptr) -> bool {
+        client_ptr->set_read_timeout(5, 0);
+        client_ptr->set_write_timeout(5, 0);
 
-        auto res = client_impl.Post(path.c_str(), params);
+        auto res = client_ptr->Post(path.c_str(), params);
         return (res && res->status >= 200 && res->status < 300);
     };
 
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
     if (parts.scheme == "https") {
-        httplib::SSLClient client_impl(parts.host, parts.port);
-        client_impl.enable_server_certificate_verification(false);
-        return perform_request(client_impl);
+        auto client_ptr = get_or_create_ssl_client(parts.host, parts.port);
+        return perform_request(client_ptr);
     }
 #endif
 
@@ -452,8 +518,8 @@ bool remove_motion_region(const std::string &endpoint, const std::string &camera
         return false;
     }
 
-    httplib::Client client_impl(parts.host, parts.port);
-    return perform_request(client_impl);
+    auto client_ptr = get_or_create_client(parts.host, parts.port);
+    return perform_request(client_ptr);
 }
 
 bool clear_motion_regions(const std::string &endpoint, const std::string &camera_name) {
@@ -467,19 +533,18 @@ bool clear_motion_regions(const std::string &endpoint, const std::string &camera
 
     std::string path = join_paths(parts.base_path, "clear_motion_regions");
 
-    auto perform_request = [&](auto &client_impl) -> bool {
-        client_impl.set_read_timeout(5, 0);
-        client_impl.set_write_timeout(5, 0);
+    auto perform_request = [&](auto client_ptr) -> bool {
+        client_ptr->set_read_timeout(5, 0);
+        client_ptr->set_write_timeout(5, 0);
 
-        auto res = client_impl.Post(path.c_str(), params);
+        auto res = client_ptr->Post(path.c_str(), params);
         return (res && res->status >= 200 && res->status < 300);
     };
 
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
     if (parts.scheme == "https") {
-        httplib::SSLClient client_impl(parts.host, parts.port);
-        client_impl.enable_server_certificate_verification(false);
-        return perform_request(client_impl);
+        auto client_ptr = get_or_create_ssl_client(parts.host, parts.port);
+        return perform_request(client_ptr);
     }
 #endif
 
@@ -487,8 +552,8 @@ bool clear_motion_regions(const std::string &endpoint, const std::string &camera
         return false;
     }
 
-    httplib::Client client_impl(parts.host, parts.port);
-    return perform_request(client_impl);
+    auto client_ptr = get_or_create_client(parts.host, parts.port);
+    return perform_request(client_ptr);
 }
 
 std::vector<ConfigurationPanel::MotionRegion> get_motion_regions(const std::string &endpoint, const std::string &camera_name) {
@@ -502,13 +567,13 @@ std::vector<ConfigurationPanel::MotionRegion> get_motion_regions(const std::stri
     std::string path = join_paths(parts.base_path, "get_motion_regions");
     path += "?name=" + camera_name;
 
-    auto perform_request = [&](auto &client_impl) -> std::vector<ConfigurationPanel::MotionRegion> {
+    auto perform_request = [&](auto client_ptr) -> std::vector<ConfigurationPanel::MotionRegion> {
         std::vector<ConfigurationPanel::MotionRegion> result;
         
-        client_impl.set_read_timeout(5, 0);
-        client_impl.set_write_timeout(5, 0);
+        client_ptr->set_read_timeout(5, 0);
+        client_ptr->set_write_timeout(5, 0);
 
-        auto res = client_impl.Get(path.c_str());
+        auto res = client_ptr->Get(path.c_str());
         if (!res || res->status != 200) {
             if (DEBUG_MOTION_FRAME) {
                 std::cout << "[get_motion_regions] Request failed - status: " 
@@ -560,9 +625,8 @@ std::vector<ConfigurationPanel::MotionRegion> get_motion_regions(const std::stri
 
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
     if (parts.scheme == "https") {
-        httplib::SSLClient client_impl(parts.host, parts.port);
-        client_impl.enable_server_certificate_verification(false);
-        return perform_request(client_impl);
+        auto client_ptr = get_or_create_ssl_client(parts.host, parts.port);
+        return perform_request(client_ptr);
     }
 #endif
 
@@ -570,8 +634,8 @@ std::vector<ConfigurationPanel::MotionRegion> get_motion_regions(const std::stri
         return regions;
     }
 
-    httplib::Client client_impl(parts.host, parts.port);
-    return perform_request(client_impl);
+    auto client_ptr = get_or_create_client(parts.host, parts.port);
+    return perform_request(client_ptr);
 }
 
 bool update_camera_properties(const std::string &endpoint, const std::string &camera_name,
@@ -594,19 +658,18 @@ bool update_camera_properties(const std::string &endpoint, const std::string &ca
 
     std::string path = join_paths(parts.base_path, "update_camera_properties");
 
-    auto perform_request = [&](auto &client_impl) -> bool {
-        client_impl.set_read_timeout(5, 0);
-        client_impl.set_write_timeout(5, 0);
+    auto perform_request = [&](auto client_ptr) -> bool {
+        client_ptr->set_read_timeout(5, 0);
+        client_ptr->set_write_timeout(5, 0);
 
-        auto res = client_impl.Post(path.c_str(), params);
+        auto res = client_ptr->Post(path.c_str(), params);
         return (res && res->status >= 200 && res->status < 300);
     };
 
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
     if (parts.scheme == "https") {
-        httplib::SSLClient client_impl(parts.host, parts.port);
-        client_impl.enable_server_certificate_verification(false);
-        return perform_request(client_impl);
+        auto client_ptr = get_or_create_ssl_client(parts.host, parts.port);
+        return perform_request(client_ptr);
     }
 #endif
 
@@ -614,8 +677,8 @@ bool update_camera_properties(const std::string &endpoint, const std::string &ca
         return false;
     }
 
-    httplib::Client client_impl(parts.host, parts.port);
-    return perform_request(client_impl);
+    auto client_ptr = get_or_create_client(parts.host, parts.port);
+    return perform_request(client_ptr);
 }
 
 bool toggle_segment_recording(const std::string &endpoint, const std::string &camera_name, bool enable) {
@@ -630,19 +693,18 @@ bool toggle_segment_recording(const std::string &endpoint, const std::string &ca
 
     std::string path = join_paths(parts.base_path, "update_camera_properties");
 
-    auto perform_request = [&](auto &client_impl) -> bool {
-        client_impl.set_read_timeout(5, 0);
-        client_impl.set_write_timeout(5, 0);
+    auto perform_request = [&](auto client_ptr) -> bool {
+        client_ptr->set_read_timeout(5, 0);
+        client_ptr->set_write_timeout(5, 0);
 
-        auto res = client_impl.Post(path.c_str(), params);
+        auto res = client_ptr->Post(path.c_str(), params);
         return (res && res->status >= 200 && res->status < 300);
     };
 
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
     if (parts.scheme == "https") {
-        httplib::SSLClient client_impl(parts.host, parts.port);
-        client_impl.enable_server_certificate_verification(false);
-        return perform_request(client_impl);
+        auto client_ptr = get_or_create_ssl_client(parts.host, parts.port);
+        return perform_request(client_ptr);
     }
 #endif
 
@@ -650,8 +712,8 @@ bool toggle_segment_recording(const std::string &endpoint, const std::string &ca
         return false;
     }
 
-    httplib::Client client_impl(parts.host, parts.port);
-    return perform_request(client_impl);
+    auto client_ptr = get_or_create_client(parts.host, parts.port);
+    return perform_request(client_ptr);
 }
 
 bool remove_camera(const std::string &endpoint, const std::string &camera_name) {
@@ -665,19 +727,18 @@ bool remove_camera(const std::string &endpoint, const std::string &camera_name) 
 
     std::string path = join_paths(parts.base_path, "remove_camera");
 
-    auto perform_request = [&](auto &client_impl) -> bool {
-        client_impl.set_read_timeout(5, 0);
-        client_impl.set_write_timeout(5, 0);
+    auto perform_request = [&](auto client_ptr) -> bool {
+        client_ptr->set_read_timeout(5, 0);
+        client_ptr->set_write_timeout(5, 0);
 
-        auto res = client_impl.Post(path.c_str(), params);
+        auto res = client_ptr->Post(path.c_str(), params);
         return (res && res->status >= 200 && res->status < 300);
     };
 
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
     if (parts.scheme == "https") {
-        httplib::SSLClient client_impl(parts.host, parts.port);
-        client_impl.enable_server_certificate_verification(false);
-        return perform_request(client_impl);
+        auto client_ptr = get_or_create_ssl_client(parts.host, parts.port);
+        return perform_request(client_ptr);
     }
 #endif
 
@@ -685,8 +746,8 @@ bool remove_camera(const std::string &endpoint, const std::string &camera_name) 
         return false;
     }
 
-    httplib::Client client_impl(parts.host, parts.port);
-    return perform_request(client_impl);
+    auto client_ptr = get_or_create_client(parts.host, parts.port);
+    return perform_request(client_ptr);
 }
 
 std::vector<ConfigurationPanel::CameraInfo> get_cameras_from_server(const std::string &endpoint) {
@@ -699,13 +760,13 @@ std::vector<ConfigurationPanel::CameraInfo> get_cameras_from_server(const std::s
 
     std::string path = join_paths(parts.base_path, "get_cameras");
 
-    auto perform_request = [&](auto &client_impl) -> std::vector<ConfigurationPanel::CameraInfo> {
+    auto perform_request = [&](auto client_ptr) -> std::vector<ConfigurationPanel::CameraInfo> {
         std::vector<ConfigurationPanel::CameraInfo> result;
         
-        client_impl.set_read_timeout(5, 0);
-        client_impl.set_write_timeout(5, 0);
+        client_ptr->set_read_timeout(5, 0);
+        client_ptr->set_write_timeout(5, 0);
 
-        auto res = client_impl.Get(path.c_str());
+        auto res = client_ptr->Get(path.c_str());
         if (!res || res->status != 200) {
             return result;
         }
@@ -741,9 +802,8 @@ std::vector<ConfigurationPanel::CameraInfo> get_cameras_from_server(const std::s
 
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
     if (parts.scheme == "https") {
-        httplib::SSLClient client_impl(parts.host, parts.port);
-        client_impl.enable_server_certificate_verification(false);
-        return perform_request(client_impl);
+        auto client_ptr = get_or_create_ssl_client(parts.host, parts.port);
+        return perform_request(client_ptr);
     }
 #endif
 
@@ -751,8 +811,8 @@ std::vector<ConfigurationPanel::CameraInfo> get_cameras_from_server(const std::s
         return cameras;
     }
 
-    httplib::Client client_impl(parts.host, parts.port);
-    return perform_request(client_impl);
+    auto client_ptr = get_or_create_client(parts.host, parts.port);
+    return perform_request(client_ptr);
 }
 
 ServerHealthInfo check_server_health(const std::string &endpoint) {
@@ -769,11 +829,11 @@ ServerHealthInfo check_server_health(const std::string &endpoint) {
         return health;
     }
 
-    auto perform_request = [&](auto& client) -> ServerHealthInfo {
-        client.set_connection_timeout(2, 0);  // 2 second timeout
-        client.set_read_timeout(2, 0);
+    auto perform_request = [&](auto client_ptr) -> ServerHealthInfo {
+        client_ptr->set_connection_timeout(2, 0);  // 2 second timeout
+        client_ptr->set_read_timeout(2, 0);
         
-        auto res = client.Get("/health");
+        auto res = client_ptr->Get("/health");
         if (!res) {
             health.error_message = "Connection failed";
             return health;
@@ -802,13 +862,13 @@ ServerHealthInfo check_server_health(const std::string &endpoint) {
 
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
     if (parts.scheme == "https") {
-        httplib::SSLClient ssl_client_impl(parts.host, parts.port);
-        return perform_request(ssl_client_impl);
+        auto client_ptr = get_or_create_ssl_client(parts.host, parts.port);
+        return perform_request(client_ptr);
     }
 #endif
 
-    httplib::Client client_impl(parts.host, parts.port);
-    return perform_request(client_impl);
+    auto client_ptr = get_or_create_client(parts.host, parts.port);
+    return perform_request(client_ptr);
 }
 
 } // namespace client_network

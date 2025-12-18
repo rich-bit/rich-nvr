@@ -2212,9 +2212,16 @@ int main(int argc, char **argv)
             threads.push_back(info);
         }
 
+        // Client worker threads heading
+        ConfigurationPanel::ThreadInfo client_heading;
+        client_heading.name = "=== Client Workers ===";
+        client_heading.is_active = true;
+        client_heading.details = "";
+        threads.push_back(client_heading);
+
         // Add async network worker thread info
         ConfigurationPanel::ThreadInfo network_thread;
-        network_thread.name = "Async Network Worker";
+        network_thread.name = "  Network Worker";
         network_thread.is_active = async_network_worker.isRunning();
         if (async_network_worker.isProcessing())
         {
@@ -2234,9 +2241,34 @@ int main(int argc, char **argv)
         }
         threads.push_back(network_thread);
 
+        // Add motion frame worker thread info
+        if (auto* motion_worker = configuration_panel.getMotionFrameWorker())
+        {
+            ConfigurationPanel::ThreadInfo motion_thread;
+            motion_thread.name = "  Motion Frame Worker";
+            motion_thread.is_active = motion_worker->isRunning();
+            if (motion_worker->isProcessing())
+            {
+                motion_thread.details = "Fetching motion frame";
+            }
+            else
+            {
+                size_t queue_size = motion_worker->getQueueSize();
+                if (queue_size > 0)
+                {
+                    motion_thread.details = "Idle (" + std::to_string(queue_size) + " queued)";
+                }
+                else
+                {
+                    motion_thread.details = "Idle (no tasks)";
+                }
+            }
+            threads.push_back(motion_thread);
+        }
+
         // Add main thread info
         ConfigurationPanel::ThreadInfo main_thread;
-        main_thread.name = "Main Thread";
+        main_thread.name = "  Main Thread";
         main_thread.is_active = !quit;
         main_thread.details = quit ? "Shutting down" : "Event loop, rendering, ImGui";
         threads.push_back(main_thread);
