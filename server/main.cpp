@@ -673,6 +673,79 @@ int main() {
              res.set_content(response.dump(), "application/json");
            });
 
+  // Thread info endpoint
+  svr.Get("/threads", [&](const httplib::Request &, httplib::Response &res) {
+    json threads_array = json::array();
+    
+    // Get all camera names
+    auto camera_names = manager.getCameraNames();
+    
+    // For each camera, add motion thread and segment worker thread
+    for (const auto& cam_name : camera_names) {
+      auto* cam = manager.getCamera(cam_name);
+      if (!cam) continue;
+      
+      // Motion detection thread
+      json motion_thread;
+      motion_thread["name"] = "Motion: " + cam_name;
+      motion_thread["is_active"] = cam->motion_frame(); // Active if motion enabled
+      motion_thread["details"] = cam->motion_frame() ? "Processing motion frames" : "Disabled";
+      threads_array.push_back(motion_thread);
+      
+      // Segment worker thread (only if segmentation is enabled)
+      if (cam->segment()) {
+        json segment_thread;
+        segment_thread["name"] = "Segment: " + cam_name;
+        segment_thread["is_active"] = true;
+        segment_thread["details"] = "Monitoring segment directory";
+        threads_array.push_back(segment_thread);
+      }
+    }
+    
+    // GStreamer RTSP proxy thread (if any cameras use it)
+    bool has_gst_proxy = false;
+    for (const auto& cam_name : camera_names) {
+      auto* cam = manager.getCamera(cam_name);
+      if (cam && cam->getGstreamerEncodedProxy()) {
+        has_gst_proxy = true;
+        break;
+      }
+    }
+    if (has_gst_proxy) {
+      json gst_thread;
+      gst_thread["name"] = "GStreamer RTSP Proxy";
+      gst_thread["is_active"] = true;
+      gst_thread["details"] = "GLib main loop (port " + std::to_string(settings.live_rtsp_proxy_port()) + ")";
+      threads_array.push_back(gst_thread);
+    }
+    
+    // Live555 RTSP proxy thread (if any cameras use it)
+    bool has_live555_proxy = false;
+    for (const auto& cam_name : camera_names) {
+      auto* cam = manager.getCamera(cam_name);
+      if (cam && cam->getLive555Proxied()) {
+        has_live555_proxy = true;
+        break;
+      }
+    }
+    if (has_live555_proxy) {
+      json live555_thread;
+      live555_thread["name"] = "Live555 RTSP Proxy";
+      live555_thread["is_active"] = true;
+      live555_thread["details"] = "RTSP server (port " + std::to_string(settings.live_rtsp_proxy_port()) + ")";
+      threads_array.push_back(live555_thread);
+    }
+    
+    // HTTP server thread
+    json http_thread;
+    http_thread["name"] = "HTTP Server";
+    http_thread["is_active"] = true;
+    http_thread["details"] = "REST API (port 8080)";
+    threads_array.push_back(http_thread);
+    
+    res.set_content(threads_array.dump(), "application/json");
+  });
+
   svr.set_error_handler(
       [](const httplib::Request &req, httplib::Response &res) {
         std::cout << "[ERROR HANDLER] Path: " << req.path

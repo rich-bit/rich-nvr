@@ -2273,6 +2273,30 @@ int main(int argc, char **argv)
         main_thread.details = quit ? "Shutting down" : "Event loop, rendering, ImGui";
         threads.push_back(main_thread);
 
+        // Fetch server threads if available
+        if (!client_config.server_endpoint.empty())
+        {
+            auto server_threads = client_network::get_server_threads(client_config.server_endpoint);
+            if (!server_threads.empty())
+            {
+                // Server worker threads heading
+                ConfigurationPanel::ThreadInfo server_heading;
+                server_heading.name = "=== Server Workers ===";
+                server_heading.is_active = true;
+                server_heading.details = "";
+                threads.push_back(server_heading);
+
+                for (const auto &st : server_threads)
+                {
+                    ConfigurationPanel::ThreadInfo server_thread;
+                    server_thread.name = "  " + st.name;
+                    server_thread.is_active = st.is_active;
+                    server_thread.details = st.details;
+                    threads.push_back(server_thread);
+                }
+            }
+        }
+
         return threads;
     };
     configuration_panel.setThreadInfoCallback(thread_info_callback);

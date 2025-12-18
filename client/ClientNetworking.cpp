@@ -871,4 +871,54 @@ ServerHealthInfo check_server_health(const std::string &endpoint) {
     return perform_request(client_ptr);
 }
 
+std::vector<ServerThreadInfo> get_server_threads(const std::string &endpoint) {
+    std::vector<ServerThreadInfo> threads;
+    
+    auto parts = parse_endpoint(endpoint);
+    if (parts.host.empty()) {
+        return threads;
+    }
+    
+    std::string path = join_paths(parts.base_path, "threads");
+    
+    auto perform_request = [&](auto client_ptr) -> std::vector<ServerThreadInfo> {
+        std::vector<ServerThreadInfo> result;
+        
+        client_ptr->set_connection_timeout(2, 0);
+        client_ptr->set_read_timeout(2, 0);
+        
+        auto res = client_ptr->Get(path.c_str());
+        if (!res || res->status != 200) {
+            return result;
+        }
+        
+        try {
+            nlohmann::json j = nlohmann::json::parse(res->body);
+            if (j.is_array()) {
+                for (const auto& thread_json : j) {
+                    ServerThreadInfo info;
+                    info.name = thread_json.value("name", "");
+                    info.is_active = thread_json.value("is_active", false);
+                    info.details = thread_json.value("details", "");
+                    result.push_back(info);
+                }
+            }
+        } catch (const std::exception& e) {
+            return result;
+        }
+        
+        return result;
+    };
+    
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+    if (parts.scheme == "https") {
+        auto client_ptr = get_or_create_ssl_client(parts.host, parts.port);
+        return perform_request(client_ptr);
+    }
+#endif
+    
+    auto client_ptr = get_or_create_client(parts.host, parts.port);
+    return perform_request(client_ptr);
+}
+
 } // namespace client_network

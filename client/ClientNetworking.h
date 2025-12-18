@@ -31,6 +31,13 @@ struct ServerHealthInfo {
     std::string error_message;
 };
 
+struct ServerThreadInfo {
+    std::string name;
+    bool is_active;
+    std::string details;
+};
+
 ServerHealthInfo check_server_health(const std::string &endpoint);
+std::vector<ServerThreadInfo> get_server_threads(const std::string &endpoint);
 
 } // namespace client_network
