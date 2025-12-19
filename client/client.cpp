@@ -323,6 +323,7 @@ struct VideoStreamCtx
     std::atomic<bool> worker_stop{false};
     std::atomic<bool> worker_failed{false};
     std::atomic<bool> pending_reference_update{false};
+    std::atomic<bool> async_open_in_progress{false};
 };
 
 int main(int argc, char **argv)
@@ -585,7 +586,11 @@ int main(int argc, char **argv)
     auto release_stream = [&](VideoStreamCtx &s)
     {
         stop_stream_worker(s);
+        
+        // Stop any async open in progress by setting abort flag
         s.interrupt_ctx.abort = true;
+        s.async_open_in_progress.store(false);
+        
         s.interrupt_ctx.deadline = std::chrono::steady_clock::time_point{};
         if (s.pkt)
         {
@@ -1060,6 +1065,56 @@ int main(int argc, char **argv)
             {
                 av_packet_unref(worker_stream.pkt);
             } });
+    };
+
+    auto async_open_stream = [&](int idx, const std::string &url, bool set_reference)
+    {
+        if (idx < 0 || idx >= stream_count)
+        {
+            return;
+        }
+        
+        VideoStreamCtx &s = streams[idx];
+        
+        // Don't start another async open if one is already in progress
+        if (s.async_open_in_progress.load())
+        {
+            return;
+        }
+        
+        s.async_open_in_progress.store(true);
+        
+        // Create a detached thread so we don't need to manage joining
+        std::thread([&, idx, url, set_reference]()
+        {
+            bool success = open_stream(idx, url, set_reference);
+            
+            if (success)
+            {
+                record_stream_open(idx);
+                
+                // Handle canvas dimensions if needed
+                if (ensure_canvas_dimensions && streams[idx].vctx)
+                {
+                    if (!ensure_canvas_dimensions(streams[idx].vctx->width,
+                                                  streams[idx].vctx->height,
+                                                  placeholder_dimensions))
+                    {
+                        std::cerr << "Failed to resize canvas during async open." << "\n";
+                    }
+                }
+                
+                // Start the worker thread for this stream
+                start_stream_worker(idx);
+            }
+            else
+            {
+                // Schedule retry if opening failed
+                schedule_stream_retry(idx, kStreamRetryInitialDelay);
+            }
+            
+            streams[idx].async_open_in_progress.store(false);
+        }).detach();
     };
 
     auto configure_audio = [&](VideoStreamCtx &audio_stream) -> bool
@@ -2273,29 +2328,8 @@ int main(int argc, char **argv)
         main_thread.details = quit ? "Shutting down" : "Event loop, rendering, ImGui";
         threads.push_back(main_thread);
 
-        // Fetch server threads if available
-        if (!client_config.server_endpoint.empty())
-        {
-            auto server_threads = client_network::get_server_threads(client_config.server_endpoint);
-            if (!server_threads.empty())
-            {
-                // Server worker threads heading
-                ConfigurationPanel::ThreadInfo server_heading;
-                server_heading.name = "=== Server Workers ===";
-                server_heading.is_active = true;
-                server_heading.details = "";
-                threads.push_back(server_heading);
-
-                for (const auto &st : server_threads)
-                {
-                    ConfigurationPanel::ThreadInfo server_thread;
-                    server_thread.name = "  " + st.name;
-                    server_thread.is_active = st.is_active;
-                    server_thread.details = st.details;
-                    threads.push_back(server_thread);
-                }
-            }
-        }
+        // Note: Server threads are fetched asynchronously by ConfigurationPanel
+        // and displayed separately to avoid blocking the UI
 
         return threads;
     };
@@ -3273,32 +3307,9 @@ int main(int argc, char **argv)
             else if (reload_stream_requested >= 0 && reload_stream_requested < stream_count)
             {
                 clear_canvas_slot(reload_stream_requested);
-                if (!open_stream(reload_stream_requested, stream_urls[reload_stream_requested], reload_stream_requested == 0))
-                {
-                    std::cerr << "Failed to reload stream: " << stream_urls[reload_stream_requested] << "\n";
-                    schedule_stream_retry(reload_stream_requested, kStreamRetryInitialDelay);
-                }
-                else
-                {
-                    record_stream_open(reload_stream_requested);
-                    if (ensure_canvas_dimensions && streams[reload_stream_requested].vctx)
-                    {
-                        if (!ensure_canvas_dimensions(streams[reload_stream_requested].vctx->width,
-                                                      streams[reload_stream_requested].vctx->height,
-                                                      placeholder_dimensions))
-                        {
-                            std::cerr << "Failed to resize canvas during reload (single)." << "\n";
-                        }
-                    }
-                    if (need_audio_reset)
-                    {
-                        if (!configure_audio(streams[0]))
-                        {
-                            std::cerr << "Failed to reconfigure audio\n";
-                        }
-                    }
-                    start_stream_worker(reload_stream_requested);
-                }
+                
+                // Use async_open_stream to avoid blocking the main thread during reconnection
+                async_open_stream(reload_stream_requested, stream_urls[reload_stream_requested], reload_stream_requested == 0);
             }
 
             if (need_audio_reset && audio_device_open)

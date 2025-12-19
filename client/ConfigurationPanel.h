@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -8,6 +9,10 @@
 #include <vector>
 
 struct ImVec2;
+
+namespace client_network {
+    struct ServerThreadInfo;
+}
 
 struct ConfigurationWindowSettings {
     float width = 720.0f;
@@ -242,4 +247,11 @@ private:
     std::vector<CameraInfo> server_cameras_;
     float last_server_camera_fetch_time_;
     bool server_camera_fetch_in_progress_;
+    
+    // Async server thread info (non-blocking)
+    std::atomic<bool> server_thread_info_fetch_in_progress_;
+    std::vector<client_network::ServerThreadInfo> cached_server_threads_;
+    mutable std::mutex server_thread_cache_mutex_;
+    float last_server_thread_info_fetch_;
+    float server_check_interval_;
 };

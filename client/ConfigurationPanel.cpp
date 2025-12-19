@@ -1,4 +1,5 @@
 #include "ConfigurationPanel.h"
+#include "ClientNetworking.h"
 
 #include <algorithm>
 #include <cmath>
@@ -110,7 +111,10 @@ ConfigurationPanel::ConfigurationPanel(ConfigurationWindowSettings &window_setti
       has_pending_motion_frame_(false),
       pending_motion_frame_width_(0),
       pending_motion_frame_height_(0),
-      motion_frame_fetch_interval_(1.0f)
+      motion_frame_fetch_interval_(1.0f),
+      server_thread_info_fetch_in_progress_(false),
+      last_server_thread_info_fetch_(0.0f),
+      server_check_interval_(5.0f)
 {
     // Create dedicated worker thread for motion frame fetching
     // This prevents motion frame updates from being delayed by other async tasks
@@ -140,6 +144,31 @@ void ConfigurationPanel::render(bool &open)
         open = false;
         close_after_save_ = false;
         return;
+    }
+
+    // ========== ASYNC SERVER THREAD INFO FETCH (NON-BLOCKING) ==========
+    float current_time = ImGui::GetTime();
+    std::string endpoint(server_endpoint_.data());
+    
+    if (!endpoint.empty() && 
+        current_time - last_server_thread_info_fetch_ > server_check_interval_)
+    {
+        if (!server_thread_info_fetch_in_progress_.load() && async_worker_)
+        {
+            server_thread_info_fetch_in_progress_.store(true);
+            last_server_thread_info_fetch_ = current_time;
+            
+            async_worker_->enqueueTask([this, endpoint]() {
+                auto server_threads = client_network::get_server_threads(endpoint);
+                
+                {
+                    std::lock_guard<std::mutex> lock(server_thread_cache_mutex_);
+                    cached_server_threads_ = std::move(server_threads);
+                }
+                
+                server_thread_info_fetch_in_progress_.store(false);
+            });
+        }
     }
 
     const float min_window_width = 360.0f;
@@ -1589,7 +1618,7 @@ void ConfigurationPanel::renderInfoTab(bool set_selected)
             }
             else
             {
-                ImGui::Text("Total threads: %zu", threads.size());
+                ImGui::Text("Total client threads: %zu", threads.size());
                 ImGui::Spacing();
 
                 if (ImGui::BeginTable("ThreadTable", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
@@ -1620,6 +1649,63 @@ void ConfigurationPanel::renderInfoTab(bool set_selected)
         else
         {
             ImGui::TextDisabled("Thread information callback not configured.");
+        }
+
+        // ========== SERVER THREADS (ASYNC, CACHED DATA) ==========
+        std::string endpoint(server_endpoint_.data());
+        if (!endpoint.empty())
+        {
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+            
+            std::lock_guard<std::mutex> lock(server_thread_cache_mutex_);
+            
+            if (!cached_server_threads_.empty())
+            {
+                ImGui::Text("Total server threads: %zu", cached_server_threads_.size());
+                ImGui::Spacing();
+                
+                if (ImGui::BeginTable("ServerThreadTable", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
+                {
+                    ImGui::TableSetupColumn("Thread Name", ImGuiTableColumnFlags_WidthFixed, 200.0f);
+                    ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+                    ImGui::TableSetupColumn("Details", ImGuiTableColumnFlags_WidthStretch);
+                    ImGui::TableHeadersRow();
+                    
+                    // Add server heading
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::TextColored(ImVec4(0.4f, 0.8f, 1.0f, 1.0f), "=== Server Workers ===");
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::TableSetColumnIndex(2);
+                    
+                    // Add server threads
+                    for (const auto &thread : cached_server_threads_)
+                    {
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::Text("  %s", thread.name.c_str());
+
+                        ImGui::TableSetColumnIndex(1);
+                        ImVec4 status_color = thread.is_active ? ImVec4(0.2f, 0.8f, 0.2f, 1.0f) : ImVec4(0.7f, 0.7f, 0.7f, 1.0f);
+                        ImGui::TextColored(status_color, "%s", thread.is_active ? "Active" : "Stopped");
+
+                        ImGui::TableSetColumnIndex(2);
+                        ImGui::TextUnformatted(thread.details.c_str());
+                    }
+
+                    ImGui::EndTable();
+                }
+            }
+            else if (server_thread_info_fetch_in_progress_.load())
+            {
+                ImGui::TextDisabled("Fetching server thread information...");
+            }
+            else
+            {
+                ImGui::TextDisabled("Server not reachable or no threads available.");
+            }
         }
 
         ImGui::EndTabItem();
