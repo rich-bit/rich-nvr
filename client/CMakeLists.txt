@@ -11,7 +11,7 @@ pkg_check_modules(SDL2 REQUIRED sdl2)
 pkg_check_modules(FFMPEG REQUIRED libavformat libavcodec libavutil libswscale libswresample)
 pkg_check_modules(HTTPLIB REQUIRED cpp-httplib)
 
-add_executable(richclient
+add_executable(nvrclient
     client.cpp
     ClientConfig.cpp
     ClientNetworking.cpp
@@ -25,7 +25,7 @@ add_executable(richclient
     ${IMGUI_DIR}/backends/imgui_impl_sdlrenderer2.cpp
 )
 
-target_include_directories(richclient PRIVATE
+target_include_directories(nvrclient PRIVATE
     ${SDL2_INCLUDE_DIRS}
     ${FFMPEG_INCLUDE_DIRS}
     ${HTTPLIB_INCLUDE_DIRS}
@@ -34,19 +34,19 @@ target_include_directories(richclient PRIVATE
     ${CMAKE_SOURCE_DIR}
 )
 
-target_compile_options(richclient PRIVATE
+target_compile_options(nvrclient PRIVATE
     ${SDL2_CFLAGS_OTHER}
     ${FFMPEG_CFLAGS_OTHER}
     ${HTTPLIB_CFLAGS_OTHER}
 )
 
-target_link_libraries(richclient PRIVATE
+target_link_libraries(nvrclient PRIVATE
     ${SDL2_LIBRARIES}
     ${FFMPEG_LIBRARIES}
     pthread
     ${HTTPLIB_LIBRARIES}
 )
 
-set_target_properties(richclient PROPERTIES
+set_target_properties(nvrclient PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${RICH_DIST_CLIENT_DIR}"
 )

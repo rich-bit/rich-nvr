@@ -1,0 +1,24 @@
+services:
+  nvrserver:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      target: runtime
+    image: rich-nvr:latest
+    command: ["/app/dist/server/nvrserver"]
+    environment:
+      - TZ=UTC
+    ports:
+      - "8080:8080"   # HTTP API
+      - "8554:8554"   # RTSP proxy
+    volumes:
+      - ./media:/app/dist/server/media:rw          # Recordings
+      - ./cameras.json:/app/dist/server/cameras.json:rw  # Camera config (optional)
+    restart: unless-stopped
+    networks:
+      - nvr-network
+
+networks:
+  nvr-network:
+    driver: bridge
+

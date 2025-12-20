@@ -10,7 +10,7 @@ Simply run the server binary:
 
 ```bash
 cd dist/server
-./richserver
+./nvrserver
 ```
 
 The server will:
@@ -55,13 +55,15 @@ The server will:
 
 - `--debug audio` enables verbose audio logging to stdout
 - `--debug grid` enables grid debug information
+- `--debug motion-frame` enables motion frame processing debug output
 - `--debug all` all debug info enabled
 
 Example:
 
 ```bash
-./richclient --debug audio
-./richclient --debug audio rtsp://IP:PORT/STREAM-ID
-./richclient --debug grid
-./richclient --debug all
+./nvrclient --debug audio
+./nvrclient --debug audio rtsp://IP:PORT/STREAM-ID
+./nvrclient --debug grid
+./nvrclient --debug motion-frame
+./nvrclient --debug all
 ```

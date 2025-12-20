@@ -329,7 +329,7 @@ AddCameraResult send_add_camera_request(const AddCameraRequest &request, std::st
         }
 
         inner_result.success = true;
-        inner_result.message = response_body.empty() ? "Camera added via RichServer." : response_body;
+        inner_result.message = response_body.empty() ? "Camera added via NVR Server." : response_body;
         return inner_result;
     };
 

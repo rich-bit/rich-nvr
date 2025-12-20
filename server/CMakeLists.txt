@@ -1,9 +1,10 @@
 cmake_minimum_required(VERSION 3.16)
-project(RichServer)
+project(NVRServer)
 
 set(CMAKE_CXX_STANDARD 17)
 
 find_package(OpenCV REQUIRED COMPONENTS core imgproc video imgcodecs)
+# Qt6 still needed for VideoExporter and conversations (TODO: replace with std:: alternatives)
 find_package(Qt6 REQUIRED COMPONENTS Core)
 
 if(DEFINED LIVE555_DIR)
@@ -105,7 +106,7 @@ else() # Windows
     link_directories(${GSTREAMER_LIB_DIRS})
 endif()
 
-add_library(RichServerLib 
+add_library(NVRServerLib 
     ../core/CameraManager.cpp 
     ../core/CameraStream.cpp 
     ../core/PathUtils.cpp 
@@ -116,7 +117,7 @@ add_library(RichServerLib
     ../core/live555RtspProxy.cpp
     ../core/gstreamerRtspProxy.cpp)
     
-add_executable(richserver main.cpp)
+add_executable(nvrserver main.cpp)
 
 # Set output directory to root project's /dist/server for all configs
 set(DIST_SERVER_DIR "${RICH_DIST_SERVER_DIR}")
@@ -125,25 +126,24 @@ set(DIST_SERVER_DIR "${RICH_DIST_SERVER_DIR}")
 if(CMAKE_CONFIGURATION_TYPES)
     foreach(OUTPUTCONFIG ${CMAKE_CONFIGURATION_TYPES})
         string(TOUPPER ${OUTPUTCONFIG} OUTPUTCONFIG_UPPER)
-        set_target_properties(richserver PROPERTIES
+        set_target_properties(nvrserver PROPERTIES
             RUNTIME_OUTPUT_DIRECTORY_${OUTPUTCONFIG_UPPER} "${DIST_SERVER_DIR}"
             ARCHIVE_OUTPUT_DIRECTORY_${OUTPUTCONFIG_UPPER} "${DIST_SERVER_DIR}"  # for .lib files
             LIBRARY_OUTPUT_DIRECTORY_${OUTPUTCONFIG_UPPER} "${DIST_SERVER_DIR}"  # for .dll (if you ever build DLLs)
         )
     endforeach()
 else()
-    set_target_properties(richserver PROPERTIES
+    set_target_properties(nvrserver PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${DIST_SERVER_DIR}"
         ARCHIVE_OUTPUT_DIRECTORY "${DIST_SERVER_DIR}"
         LIBRARY_OUTPUT_DIRECTORY "${DIST_SERVER_DIR}"
     )
 endif()
 
-target_link_libraries(richserver RichServerLib ${GSTREAMER_LIBS} ${HTTPLIB_LIBRARIES} ${OpenCV_LIBS} gstrtspserver-1.0 gstapp-1.0 Qt6::Core)
-target_include_directories(RichServerLib PRIVATE ${Qt6Core_INCLUDE_DIRS})
+target_link_libraries(nvrserver NVRServerLib ${GSTREAMER_LIBS} ${HTTPLIB_LIBRARIES} ${OpenCV_LIBS} gstrtspserver-1.0 gstapp-1.0 Qt6::Core)
 
 # Attach include dirs to the target that compiles live555RtspProxy.*
-target_include_directories(RichServerLib PUBLIC
+target_include_directories(NVRServerLib PUBLIC
   ${LIVE555_LIVEMEDIA_INCLUDE}
   ${LIVE555_GROUPSOCK_INCLUDE}
   ${LIVE555_USAGEENV_INCLUDE}
@@ -151,18 +151,19 @@ target_include_directories(RichServerLib PUBLIC
 )
 
 # Link the libs (you already do, this just ensures order & grouping)
-target_link_libraries(RichServerLib
+target_link_libraries(NVRServerLib
   ${LIVE555_LIVEMEDIA_LIB}
   ${LIVE555_GROUPSOCK_LIB}
   ${LIVE555_BASICUSAGEENV_LIB}
   ${LIVE555_USAGEENV_LIB}
+  Qt6::Core
   ssl crypto
 )
 
 if(WIN32 AND GStreamer_RUNTIME_DIR)
     file(GLOB GST_DLLS "${GStreamer_RUNTIME_DIR}/bin/*.dll")
     foreach(gst_dll ${GST_DLLS})
-        add_custom_command(TARGET richserver POST_BUILD
+        add_custom_command(TARGET nvrserver POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${gst_dll}"
                 "${DIST_SERVER_DIR}/"
@@ -170,11 +171,11 @@ if(WIN32 AND GStreamer_RUNTIME_DIR)
     endforeach()
 
     # 2. Copy the whole plugins directory
-    add_custom_command(TARGET richserver POST_BUILD
+    add_custom_command(TARGET nvrserver POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory
             "${RICH_DIST_SERVER_DIR}/lib/gstreamer-1.0"
     )
-    add_custom_command(TARGET richserver POST_BUILD
+    add_custom_command(TARGET nvrserver POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_directory
             "${GStreamer_RUNTIME_DIR}/lib/gstreamer-1.0"
             "${RICH_DIST_SERVER_DIR}/lib/gstreamer-1.0"

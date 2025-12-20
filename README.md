@@ -1,18 +1,20 @@
 # Network Video Recorder (rich-nvr)
 This is a network video recorder suitable for home surveillance or for recording with many cameras optionally triggered via motion.
 Built with open-source software, including **FFmpeg**, **SDL2**, **Dear ImGui**, **GStreamer**, **LIVE555**, **OpenCV**, **cpp-httplib** and **nlohmann/json**.
+Client program runs in Linux or Windows, optional server is Linux only.
 
 ## Documentation
 
 - Building: [docs/BUILDING.md](docs/BUILDING.md)
-- Client usage: [docs/USAGE.md](docs/USAGE.md)
+- Usage: [docs/USAGE.md](docs/USAGE.md)
+- Docker: [docs/DOCKER.md](docs/DOCKER.md)
 
 ## Features
 
 - **RTSP grid client** (SDL2 + ImGui)  
 ![Adding streams](showcase/add_streams.gif)
 
-- **Setup motion-detect triggered recording with motion regions**  
+- **Setup motion triggered recording with motion regions**  
 ![Motion detection setup](showcase/setup_motion.gif)
 
 - **Running threads listed in info tab**  
@@ -21,7 +23,7 @@ Built with open-source software, including **FFmpeg**, **SDL2**, **Dear ImGui**,
 - Switch audio between streams (left-click)
 - Audio overlay: volume + mute (auto-hides)
 - Stream name overlay (auto-hides unless pinned)
-- MinGW-w64 cross-build for Windows via `mingw3264/`
+- MinGW-w64 cross-build for Windows via `mingw/`
 
 ### Server, using Live555 to create a proxied stream for clients to preview:
 ```text
@@ -39,7 +41,7 @@ Camera C ─┘
            ┌──────────────┐     pulls RTSP      ┌──────────────┐
 rtsp://camA│  Camera A    │====================>│              │
            └──────────────┘                     │              │
-           ┌──────────────┐     pulls RTSP      │  RichServer  │
+           ┌──────────────┐     pulls RTSP      │  NVRServer   │
 rtsp://camB│  Camera B    │====================>│ (GStreamer   │
            └──────────────┘                     │ + OpenCV/Py) │
            ┌──────────────┐     pulls RTSP      │              │

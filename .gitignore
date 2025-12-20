@@ -44,6 +44,11 @@ qrc_*.cpp
 *.tmp
 *~
 
+# === Downloaded packages ===
+*.tar.gz
+*.zip
+*.tgz
+
 # === MacOS ===
 .DS_Store
 

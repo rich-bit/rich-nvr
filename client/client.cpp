@@ -14,6 +14,7 @@ extern "C"
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <filesystem>
@@ -375,7 +376,16 @@ int main(int argc, char **argv)
     }
 
     std::vector<CameraConfig> stream_configs;
-    std::filesystem::path config_path = resolve_config_path(argv[0]);
+    std::filesystem::path config_path;
+    
+    // Check for CONFIG_PATH environment variable
+    const char* env_config_path = std::getenv("CONFIG_PATH");
+    if (env_config_path && *env_config_path) {
+        config_path = env_config_path;
+    } else {
+        config_path = resolve_config_path(argv[0]);
+    }
+    
     nlohmann::json client_config_json = nlohmann::json::object();
     ClientConfig client_config;
     bool config_loaded = false;
@@ -1333,7 +1343,7 @@ int main(int argc, char **argv)
             if (display_name.empty())
             {
                 result.success = false;
-                result.message = "Camera name is required when using RichServer.";
+                result.message = "Camera name is required when using NVR Server.";
                 return result;
             }
             if (request.server_endpoint.empty())
@@ -1367,7 +1377,7 @@ int main(int argc, char **argv)
                     trim_in_place(status_message);
                     if (status_message.empty())
                     {
-                        status_message = "Failed to add camera via RichServer.";
+                        status_message = "Failed to add camera via NVR Server.";
                     }
                     result.success = false;
                     result.message = status_message;
@@ -1378,7 +1388,7 @@ int main(int argc, char **argv)
                 trim_in_place(status_message);
                 if (status_message.empty())
                 {
-                    status_message = "Camera added via RichServer.";
+                    status_message = "Camera added via NVR Server.";
                 }
             }
 

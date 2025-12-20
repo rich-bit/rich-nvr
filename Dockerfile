@@ -9,12 +9,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /tmp
-RUN --mount=type=bind,source=live,target=/cache/live,ro,optional \
-  set -eux; \
-  ARCHIVE_SRC=/cache/live/live555-latest.tar.gz; \
-  if [ -f "${ARCHIVE_SRC}" ]; then \
-    cp "${ARCHIVE_SRC}" live555-latest.tar.gz; \
-  else \
+COPY cache/live555-latest.tar.gz* ./
+RUN set -eux; \
+  if [ ! -f live555-latest.tar.gz ]; then \
     wget http://www.live555.com/liveMedia/public/live555-latest.tar.gz -O live555-latest.tar.gz; \
   fi; \
   tar -xzf live555-latest.tar.gz; \
@@ -23,15 +20,15 @@ RUN --mount=type=bind,source=live,target=/cache/live,ro,optional \
   make -j"$(nproc)" CXXFLAGS="-std=gnu++20"
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
-RUN mkdir -p /opt/live555/include/{liveMedia,groupsock,UsageEnvironment,BasicUsageEnvironment} /opt/live555/lib \
- && cp -r /tmp/live/liveMedia/include/*             /opt/live555/include/liveMedia/ \
- && cp -r /tmp/live/groupsock/include/*             /opt/live555/include/groupsock/ \
- && cp -r /tmp/live/UsageEnvironment/include/*      /opt/live555/include/UsageEnvironment/ \
- && cp -r /tmp/live/BasicUsageEnvironment/include/* /opt/live555/include/BasicUsageEnvironment/ \
- && cp /tmp/live/liveMedia/libliveMedia.a                   /opt/live555/lib/ \
- && cp /tmp/live/groupsock/libgroupsock.a                   /opt/live555/lib/ \
- && cp /tmp/live/UsageEnvironment/libUsageEnvironment.a     /opt/live555/lib/ \
- && cp /tmp/live/BasicUsageEnvironment/libBasicUsageEnvironment.a /opt/live555/lib/
+RUN mkdir -p /opt/live555/{liveMedia,groupsock,UsageEnvironment,BasicUsageEnvironment} \
+ && cp -r /tmp/live/liveMedia/include            /opt/live555/liveMedia/ \
+ && cp    /tmp/live/liveMedia/libliveMedia.a     /opt/live555/liveMedia/ \
+ && cp -r /tmp/live/groupsock/include            /opt/live555/groupsock/ \
+ && cp    /tmp/live/groupsock/libgroupsock.a     /opt/live555/groupsock/ \
+ && cp -r /tmp/live/UsageEnvironment/include     /opt/live555/UsageEnvironment/ \
+ && cp    /tmp/live/UsageEnvironment/libUsageEnvironment.a /opt/live555/UsageEnvironment/ \
+ && cp -r /tmp/live/BasicUsageEnvironment/include /opt/live555/BasicUsageEnvironment/ \
+ && cp    /tmp/live/BasicUsageEnvironment/libBasicUsageEnvironment.a /opt/live555/BasicUsageEnvironment/
 
 # ===== Stage 2: build your app (devcontainer uses this stage) =====
 FROM ubuntu:24.04 AS build
@@ -39,12 +36,14 @@ ENV DEBIAN_FRONTEND=noninteractive
 ARG BUILD_TYPE=Release
 ENV BUILD_TYPE=${BUILD_TYPE}
 
-# Toolchain, Qt dev, GStreamer dev + plugins, OpenCV dev, ffmpeg, JSON and HTTP libs
+# Toolchain, GStreamer dev + plugins, OpenCV dev, ffmpeg, SDL2, JSON and HTTP libs
+# Note: Qt6Core still needed by VideoExporter (TODO: replace with std:: alternatives)
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential cmake git pkg-config wget \
       libssl-dev \
       nlohmann-json3-dev libcpp-httplib-dev \
       libopencv-dev \
+      qt6-base-dev qt6-base-private-dev \
       libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstrtspserver-1.0-dev \
       gstreamer1.0-tools \
       gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
@@ -59,28 +58,20 @@ COPY --from=live555 /opt/live555 /opt/live555
 WORKDIR /app
 COPY . .
 
-RUN --mount=type=bind,source=third_party,target=/cache/third_party,ro,optional \
-  set -eux; \
-  if [ -d /cache/third_party ]; then \
-    rm -rf third_party; \
-    mkdir -p third_party; \
-    cp -a /cache/third_party/. third_party/; \
-  fi; \
-    QT_ARCH="$(dpkg-architecture -qDEB_HOST_MULTIARCH)"; \
-    QT6_PREFIX="/usr/lib/${QT_ARCH}/cmake/Qt6"; \
-    mkdir -p build && cd build; \
-    cmake .. \
-      -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
-      -DLIVE555_DIR=/opt/live555 \
-      -DCMAKE_PREFIX_PATH="${QT6_PREFIX}" \
-      -DCMAKE_EXPORT_COMPILE_COMMANDS=ON; \
-    cmake --build . -j"$(nproc)"; \
+RUN set -eux; \
+  mkdir -p build && cd build; \
+  cmake .. \
+    -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+    -DCMAKE_PREFIX_PATH=/usr \
+    -DLIVE555_DIR=/opt/live555 \
+    -DCMAKE_EXPORT_COMPILE_COMMANDS=ON; \
+  cmake --build . -j"$(nproc)"; \
   mkdir -p /app/dist/server /app/dist/client; \
   if [ -d ../dist ]; then cp -a ../dist/* /app/dist/ || true; fi; \
-  [ -x server/richserver ] && install -Dm755 server/richserver /app/dist/server/richserver || true; \
-  [ -x client/richclient ] && install -Dm755 client/richclient /app/dist/client/richclient || true; \
+  [ -x server/nvrserver ] && install -Dm755 server/nvrserver /app/dist/server/nvrserver || true; \
+  [ -x client/nvrclient ] && install -Dm755 client/nvrclient /app/dist/client/nvrclient || true; \
   cp -f compile_commands.json /app/dist/ 2>/dev/null || true; \
-    ls -l /app/dist /app/dist/server /app/dist/client || true
+  ls -l /app/dist /app/dist/server /app/dist/client || true
 
 # ===== Stage 3: runtime (lean image for running) =====
 FROM ubuntu:24.04 AS runtime
@@ -90,6 +81,8 @@ ENV INSTALL_DEBUG_TOOLS=${INSTALL_DEBUG_TOOLS}
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
   ca-certificates libssl3 \
+  libqt6core6 \
+  libcpp-httplib0.14 \
   libgstreamer1.0-0 libgstreamer-plugins-base1.0-0 libgstrtspserver-1.0-0 \
   gstreamer1.0-tools \
   gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
@@ -108,8 +101,5 @@ COPY --from=build /app/dist /app/dist
 EXPOSE 8554 8080
 CMD ["/bin/bash"]
 
-
-# DOCKER_BUILDKIT=1 docker build \
-#   --mount=type=bind,src=$PWD/live,dst=/cache/live,ro,optional \
-#   --mount=type=bind,src=$PWD/third_party,dst=/cache/third_party,ro,optional \
-#   -t rich-nvr-build .
+# Build command:
+# docker build -t rich-nvr:latest .

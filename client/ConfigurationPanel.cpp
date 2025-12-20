@@ -326,7 +326,7 @@ void ConfigurationPanel::renderAddCameraTab(bool set_selected)
     {
         active_tab_ = Tab::AddCamera;
 
-        if (ImGui::Checkbox("Connect through RichServer", &add_camera_via_server_))
+        if (ImGui::Checkbox("Connect through NVR Server", &add_camera_via_server_))
         {
             // Reset proxy state when this checkbox changes
             proxy_initiated_successfully_ = false;
@@ -504,7 +504,7 @@ void ConfigurationPanel::renderAddCameraTab(bool set_selected)
 
         if (!add_camera_via_server_)
         {
-            ImGui::TextDisabled("Advanced options are available when routing through RichServer.");
+            ImGui::TextDisabled("Advanced options are available when routing through NVR Server.");
         }
 
         ImGui::Spacing();

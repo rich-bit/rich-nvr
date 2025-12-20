@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(richclient_mingw LANGUAGES C CXX)
+project(nvrclient_mingw LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -24,7 +24,7 @@ if(FFMPEG_ROOT STREQUAL "")
   set(FFMPEG_ROOT "/home/rick/ffmpeg-8.0.1-full_build-shared" CACHE PATH "" FORCE)
 endif()
 
-add_executable(richclient
+add_executable(nvrclient
   "${CLIENT_DIR}/client.cpp"
   "${CLIENT_DIR}/ClientConfig.cpp"
   "${CLIENT_DIR}/ClientNetworking.cpp"
@@ -39,9 +39,9 @@ add_executable(richclient
   "${IMGUI_DIR}/backends/imgui_impl_sdlrenderer2.cpp"
 )
 
-set_target_properties(richclient PROPERTIES OUTPUT_NAME "richclient")
+set_target_properties(nvrclient PROPERTIES OUTPUT_NAME "nvrclient")
 
-target_include_directories(richclient PRIVATE
+target_include_directories(nvrclient PRIVATE
   "${PROJECT_ROOT}"
   "${CLIENT_DIR}"
   "${THIRD_PARTY_DIR}"
@@ -55,12 +55,12 @@ target_include_directories(richclient PRIVATE
 
 # Match your working flags
 if(MINGW)
-  target_link_options(richclient PRIVATE -static-libgcc -static-libstdc++)
+  target_link_options(nvrclient PRIVATE -static-libgcc -static-libstdc++)
 endif()
 
 # Keep the optimization consistent with your manual build
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-  target_compile_options(richclient PRIVATE $<$<CONFIG:Release>:-O2>)
+  target_compile_options(nvrclient PRIVATE $<$<CONFIG:Release>:-O2>)
 endif()
 
 # Library lookup
@@ -74,13 +74,13 @@ find_library(SWSCALE_LIB    NAMES swscale    HINTS "${FFMPEG_ROOT}/lib" REQUIRED
 find_library(SWRESAMPLE_LIB NAMES swresample HINTS "${FFMPEG_ROOT}/lib" REQUIRED)
 
 # Ensure the linker can find import libs from the provided prefixes.
-target_link_directories(richclient PRIVATE
+target_link_directories(nvrclient PRIVATE
   "${SDL2_ROOT}/lib"
   "${FFMPEG_ROOT}/lib"
 )
 
 # Windows system libs you had on the command line
-target_link_libraries(richclient PRIVATE
+target_link_libraries(nvrclient PRIVATE
   mingw32
   "${SDL2MAIN_LIB}"
   "${SDL2_LIB}"
@@ -99,9 +99,9 @@ target_link_libraries(richclient PRIVATE
 
 # -------- dist staging --------
 # Default requested output: /dist/client
-set(RICH_DIST_DIR "${PROJECT_ROOT}/dist/client" CACHE PATH "Where to stage richclient.exe + DLLs")
+set(RICH_DIST_DIR "${PROJECT_ROOT}/dist/client" CACHE PATH "Where to stage nvrclient.exe + DLLs")
 
-install(TARGETS richclient RUNTIME DESTINATION ".")
+install(TARGETS nvrclient RUNTIME DESTINATION ".")
 
 # Collect DLLs to copy
 set(_dlls_to_install "")
@@ -164,6 +164,6 @@ endif()
 # Convenience target: build + stage into dist folder via cmake --install
 add_custom_target(stage
   COMMAND "${CMAKE_COMMAND}" --install "${CMAKE_BINARY_DIR}" --prefix "${RICH_DIST_DIR}"
-  DEPENDS richclient
+  DEPENDS nvrclient
   VERBATIM
 )
