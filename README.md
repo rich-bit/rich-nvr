@@ -1,18 +1,18 @@
 # Network Video Recorder (rich-nvr)
 This is a network video recorder suitable for home surveillance or for recording with many cameras optionally triggered via motion.
-Built with fantastic open-source software including **FFmpeg**, **SDL2**, **Dear ImGui**, **GStreamer**, **LIVE555**, **OpenCV**, **cpp-httplib** and **nlohmann/json**.
+Built with open-source software, including **FFmpeg**, **SDL2**, **Dear ImGui**, **GStreamer**, **LIVE555**, **OpenCV**, **cpp-httplib** and **nlohmann/json**.
 
 ## Documentation
 
-- Building: docs/BUILDING.md
-- Client usage: docs/USAGE.md
+- Building: [docs/BUILDING.md](docs/BUILDING.md)
+- Client usage: [docs/USAGE.md](docs/USAGE.md)
 
 ## Features
 
-- **RTSP grid client** (SDL2 + ImGui + FFmpeg)  
+- **RTSP grid client** (SDL2 + ImGui)  
 ![Adding streams](showcase/add_streams.gif)
 
-- **Setup motion-detect triggered recording**  
+- **Setup motion-detect triggered recording with motion regions**  
 ![Motion detection setup](showcase/setup_motion.gif)
 
 - **Running threads listed in info tab**  
