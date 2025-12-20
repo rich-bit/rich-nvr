@@ -8,12 +8,13 @@ services:
     command: ["/app/dist/server/nvrserver"]
     environment:
       - TZ=UTC
+      - CONFIG_PATH=/config/cameras.json  # Config file location
     ports:
       - "8080:8080"   # HTTP API
       - "8554:8554"   # RTSP proxy
     volumes:
-      - ./media:/app/dist/server/media:rw          # Recordings
-      - ./cameras.json:/app/dist/server/cameras.json:rw  # Camera config (optional)
+      - ./media:/app/dist/server/media:rw  # Recordings
+      - ./config:/config:rw                # Config directory
     restart: unless-stopped
     networks:
       - nvr-network

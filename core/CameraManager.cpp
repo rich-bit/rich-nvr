@@ -1,6 +1,7 @@
 #include "CameraManager.h"
 #include "PathUtils.h"
 #include "gstreamerRtspProxy.h"
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <gst/gst.h>
@@ -16,8 +17,15 @@ CameraManager::CameraManager(Settings &settings)
     : settings_(settings), live555_proxy_() {
   gst_init(nullptr, nullptr);
 
-  std::string exe_dir = core::PathUtils::getExecutableDir();
-  config_path_ = exe_dir + "/cameras.json";
+  // Check for CONFIG_PATH environment variable
+  const char* env_config_path = std::getenv("CONFIG_PATH");
+  if (env_config_path && *env_config_path) {
+    config_path_ = env_config_path;
+  } else {
+    std::string exe_dir = core::PathUtils::getExecutableDir();
+    config_path_ = exe_dir + "/cameras.json";
+  }
+  
   loadCamerasFromJSON(config_path_);
 }
 
@@ -278,6 +286,26 @@ void CameraManager::saveSingleCameraToJSON(const std::string &filename, const st
 void CameraManager::loadCamerasFromJSON(const std::string &filename) {
   std::ifstream f(filename);
   if (!f.is_open()) {
+    std::cout << "[CameraManager] cameras.json not found at: " << filename << std::endl;
+    std::cout << "[CameraManager] Creating new empty cameras.json..." << std::endl;
+    
+    // Create parent directory if it doesn't exist
+    std::filesystem::path file_path(filename);
+    if (file_path.has_parent_path()) {
+      std::filesystem::create_directories(file_path.parent_path());
+    }
+    
+    // Create empty cameras array
+    nlohmann::json j;
+    j["cameras"] = nlohmann::json::array();
+    
+    std::ofstream out(filename);
+    if (out) {
+      out << j.dump(2) << std::endl;
+      std::cout << "[CameraManager] Created empty cameras.json at: " << filename << std::endl;
+    } else {
+      std::cerr << "[CameraManager] Warning: Could not create cameras.json at: " << filename << std::endl;
+    }
     return;
   }
 
@@ -285,7 +313,7 @@ void CameraManager::loadCamerasFromJSON(const std::string &filename) {
   try {
     f >> j;
   } catch (...) {
-    std::cerr << "Error reading/parsing cameras.json!" << std::endl;
+    std::cerr << "[CameraManager] Error reading/parsing cameras.json!" << std::endl;
     return;
   }
 
