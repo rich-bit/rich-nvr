@@ -1,5 +1,5 @@
-# rich-nvr
-This is a do-it-yourself (DIY), under-construction, network video recorder suitable for home surveillance.
+# Network Video Recorder (rich-nvr)
+This is a network video recorder suitable for home surveillance or for recording with many cameras optionally triggered via motion.
 Built with fantastic open-source software including **FFmpeg**, **SDL2**, **Dear ImGui**, **GStreamer**, **LIVE555**, **OpenCV**, **cpp-httplib** and **nlohmann/json**.
 
 ## Documentation
@@ -7,40 +7,21 @@ Built with fantastic open-source software including **FFmpeg**, **SDL2**, **Dear
 - Building: docs/BUILDING.md
 - Client usage: docs/USAGE.md
 
-## Highlights
+## Features
 
-- RTSP grid client (SDL2 + ImGui + FFmpeg)
+- **RTSP grid client** (SDL2 + ImGui + FFmpeg)  
+![Adding streams](showcase/add_streams.gif)
+
+- **Setup motion-detect triggered recording**  
+![Motion detection setup](showcase/setup_motion.gif)
+
+- **Running threads listed in info tab**  
+![Info tab](showcase/info_tab.png)
+
 - Switch audio between streams (left-click)
 - Audio overlay: volume + mute (auto-hides)
 - Stream name overlay (auto-hides unless pinned)
 - MinGW-w64 cross-build for Windows via `mingw3264/`
-
-### Client idea illustration
-```text
-┌────────────────────────────────────────────────────────────────────────────────────────┐
-│ RichNVR Client Dashboard                                  [Layout: 2x2] [⚙]            
-│ Streams: rtsp://richnvr:8554/cam-a | cam-b | cam-c | cam-d                             │
-├────────────────────────────────────────────────────────────────────────────────────────┤
-│┌─────────────────────────────────────────┐  ┌─────────────────────────────────────────┐│
-││ CAM A — Lobby                           │  │ CAM B — Garage                          ││
-││                                         │  │                                         ││
-││ Live Video [▒▒▒▒▒▒▒▒▒▒]                 │  │ Live Video [▒▒▒▒▒▒▒▒▒▒]                 ││
-││ FPS: 25   Bitrate: 3.1 Mbps             │  │ FPS: 24   Bitrate: 2.6 Mbps             ││
-││ Motion: [██▁▁▁]  Status: LIVE TCP           Motion: [▁▁▁▁▁]  Status: LIVE TCP     
-│└─────────────────────────────────────────┘  └─────────────────────────────────────────┘│
-├────────────────────────────────────────────────────────────────────────────────────────┤
-│┌─────────────────────────────────────────┐  ┌─────────────────────────────────────────┐│
-││ CAM C — Driveway                        │  │ CAM D — Backyard                        ││
-││                                         │  │                                         ││
-││ Live Video [▒▒▒▒▒▒▒▒▒▒]                 │  │ Live Video [▒▒▒▒▒▒▒▒▒▒]                 ││
-││ FPS: 25   Bitrate: 3.4 Mbps             │  │ FPS: 25   Bitrate: 2.9 Mbps             ││
-││ Motion: [████▁]  Status: LIVE TCP            Motion: [▁▁▁▁▁]  Status: LIVE TCP      
-│└─────────────────────────────────────────┘  └─────────────────────────────────────────┘│
-├────────────────────────────────────────────────────────────────────────────────────────┤
-│ [Play/Pause] [Mute] [Snapshot] [Record] [Full Screen]   CPU: 23%  GPU: 41%             │
-│ Timeline: |■■■──────|   Last event: CAM C motion                                       │
-└────────────────────────────────────────────────────────────────────────────────────────┘
-```
 
 ### Server, using Live555 to create a proxied stream for clients to preview:
 ```text

@@ -22,9 +22,14 @@
 ## Debug flags
 
 - `--debug audio` enables verbose audio logging to stdout
+- `--debug grid` enables grid debug information
+- `--debug all` all debug info enabled
 
 Example:
 
 ```bash
 ./richclient --debug audio
+./richclient --debug audio rtsp://IP:PORT/STREAM-ID
+./richclient --debug grid
+./richclient --debug all
 ```

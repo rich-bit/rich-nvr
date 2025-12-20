@@ -3163,9 +3163,9 @@ int main(int argc, char **argv)
             
             GRID_LOG("REMOVE CAMERA: idx=" << idx << ", name=" << camera_name << ", stream_count=" << stream_count << ", streams.size()=" << streams.size());
 
-            // Signal worker to stop (don't wait/join - avoid blocking main thread)
-            streams[idx].worker_stop.store(true);
-            streams[idx].interrupt_ctx.abort = true;
+            // Release the stream to stop workers cleanly
+            release_stream(streams[idx]);
+            clear_canvas_slot(idx);
 
             // Cancel any pending retry
             {
@@ -3176,7 +3176,7 @@ int main(int argc, char **argv)
                 }
             }
 
-            // Remove from configuration vectors immediately (so it won't persist or be re-added)
+            // Remove from configuration vectors (stream_configs must be updated before reload)
             stream_configs.erase(stream_configs.begin() + idx);
             stream_urls.erase(stream_urls.begin() + idx);
             stream_names.erase(stream_names.begin() + idx);
@@ -3185,25 +3185,31 @@ int main(int argc, char **argv)
             stream_last_frame_times.erase(stream_last_frame_times.begin() + idx);
             stream_stall_reported.erase(stream_stall_reported.begin() + idx);
             
-            // Update stream count
+            // Update stream count before reload
             stream_count = static_cast<int>(stream_configs.size());
             
-            GRID_LOG("After removal: stream_count=" << stream_count << ", stream_configs.size()=" << stream_configs.size() << ", streams.size()=" << streams.size());
+            GRID_LOG("After removal: stream_count=" << stream_count << ", stream_configs.size()=" << stream_configs.size());
 
-            // Persist config immediately
+            // Persist config immediately so reload uses correct data
             persist_config();
 
-            // Notify server asynchronously
+            // Notify server asynchronously (non-blocking, won't crash if server down)
             if (via_server)
             {
                 async_network_worker.enqueueTask([camera_name, endpoint = client_config.server_endpoint]()
-                                                 { client_network::remove_camera(endpoint, camera_name); });
+                {
+                    bool success = client_network::remove_camera(endpoint, camera_name);
+                    if (!success)
+                    {
+                        std::cerr << "Failed to remove camera from server: " << camera_name << "\n";
+                    }
+                });
             }
 
-            std::cerr << "Camera removal initiated: " << camera_name << " (was index " << idx << ")\n";
+            std::cerr << "Camera removed: " << camera_name << " (was index " << idx << ")\n";
             
-            // Schedule a full reload to cleanly rebuild all streams
-            // This will wait for workers to finish, then reinitialize everything based on the updated stream_configs
+            // Schedule a full reload to properly rebuild streams deque
+            // This is necessary because VideoStreamCtx can't be moved/copied
             reload_all_requested = true;
             remove_camera_requested = -1;
         }
