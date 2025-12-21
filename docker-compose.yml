@@ -1,0 +1,49 @@
+services:
+  nvrserver:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: rich-nvr:latest
+    command: ["/app/dist/server/nvrserver"]
+    environment:
+      - TZ=UTC
+      - CONFIG_PATH=/config/cameras.json
+    ports:
+      - "8080:8080"   # HTTP API
+      - "8554:8554"   # RTSP proxy
+    volumes:
+      - ./docker-dist/server/media:/app/dist/server/media:rw
+      - ./docker-dist/server/config:/config:rw
+    restart: unless-stopped
+    networks:
+      - nvr-network
+
+  nvrclient:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: rich-nvr:latest
+    command: ["/bin/sh", "-c", "mkdir -p /tmp/runtime-dir && /app/dist/client/nvrclient"]
+    environment:
+      - DISPLAY=${DISPLAY:-:0}
+      - XDG_RUNTIME_DIR=/tmp/runtime-dir
+      - PULSE_SERVER=unix:/mnt/wslg/PulseServer
+      - LIBGL_ALWAYS_SOFTWARE=0
+      - SDL_VIDEODRIVER=x11
+      - CONFIG_PATH=/config/client_config.json
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - /mnt/wslg:/mnt/wslg:rw
+      - ./docker-dist/client:/config:rw
+    devices:
+      - /dev/dxg:/dev/dxg
+    network_mode: "host"
+    restart: unless-stopped
+    depends_on:
+      - nvrserver
+
+networks:
+  nvr-network:
+    driver: bridge

@@ -65,4 +65,3 @@ rtsp://camC│  Camera C    │====================>│              │
                        e.g. recordings/<cam>/2025-09-10_12-34-56_<cam>.mkv
 
 ```
-

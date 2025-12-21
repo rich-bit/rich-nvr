@@ -4,8 +4,10 @@ CMakeCache.txt
 cmake_install.cmake
 Makefile
 build/
+media/
 config/
 dist/
+docker-dist/
 install_manifest.txt
 
 /live/

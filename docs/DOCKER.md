@@ -1,73 +1,97 @@
 # Docker Usage
 
+The project provides a Docker Compose configuration for running the NVR system in containers.
+
 ## Building the Image
 
 From the project root:
 
 ```bash
 docker build -t rich-nvr:latest .
+# Or using docker-compose:
+docker-compose build
 ```
 
-## Running the Server
+## First Time Setup
+
+Create the persistent data directories:
 
 ```bash
-cd server
-docker compose up -d
+cd /path/to/rich-nvr
+
+# Create persistent data directories
+mkdir -p docker-dist/server/config docker-dist/server/media docker-dist/client
+
+# Build the Docker images
+docker-compose build
 ```
 
-The server will:
-- Listen on port 8080 for HTTP API
-- Listen on port 8554 for RTSP proxy streams
-- Store recordings in `./media/`
-- Use `./cameras.json` for camera configuration (if present)
+## Running the Services
 
-View logs:
+**Run only the server (headless/background recording):**
 ```bash
-docker compose logs -f
+docker-compose up -d nvrserver
 ```
 
-Stop:
+**Run only the client (GUI viewer):**
 ```bash
-docker compose down
+docker-compose up nvrclient
 ```
 
-## Running the Client
+**Note:** The client requires X11/WSLg for GUI display and runs in foreground mode (no `-d` flag) so you can see the window.
 
-**Note**: The client requires X11 display access. This works automatically on WSL2 with WSLg.
-
+**Run both services together:**
 ```bash
-cd client  
-docker compose up -d
+docker-compose up -d
 ```
 
-The client will:
-- Connect to X11 display for GUI
-- Store configuration in `./config/`
-- Connect to audio via PulseAudio/PipeWire
+## Managing Services
 
-For Linux hosts (not WSL), you may need to allow Docker to access X11:
+**View logs:**
+```bash
+docker-compose logs -f nvrserver
+docker-compose logs -f nvrclient
+```
+
+**Stop all services:**
+```bash
+docker-compose down
+```
+
+**Restart a specific service:**
+```bash
+docker-compose restart nvrserver
+docker-compose restart nvrclient
+```
+
+**Rebuild after code changes:**
+```bash
+docker-compose build
+docker-compose up -d
+```
+
+## Persistent Data Locations
+
+All Docker persistent data is stored in `docker-dist/` (git-ignored):
+
+- **Server config**: `docker-dist/server/config/cameras.json`
+- **Recordings**: `docker-dist/server/media/`
+- **Client config**: `docker-dist/client/client_config.json`
+
+Configuration files are automatically created on first run.
+
+## Ports
+
+- **8080**: HTTP API (server)
+- **8554**: RTSP proxy (server)
+
+## X11 Display Access
+
+**WSL2 with WSLg**: Works automatically, no configuration needed.
+
+**Linux hosts**: You may need to allow Docker to access X11:
 ```bash
 xhost +local:docker
-```
-
-View logs:
-```bash
-docker compose logs -f
-```
-
-Stop:
-```bash
-docker compose down
-```
-
-## Running Both
-
-```bash
-# Start server
-cd server && docker compose up -d && cd ..
-
-# Start client  
-cd client && docker compose up -d && cd ..
 ```
 
 ## Notes
