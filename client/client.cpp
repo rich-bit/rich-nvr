@@ -1,13 +1,12 @@
-extern "C"
-{
-#include <libavformat/avformat.h>
+extern "C" {
 #include <libavcodec/avcodec.h>
-#include <libswscale/swscale.h>
-#include <libswresample/swresample.h>
-#include <libavutil/imgutils.h>
-#include <libavutil/opt.h>
+#include <libavformat/avformat.h>
 #include <libavutil/channel_layout.h>
 #include <libavutil/error.h>
+#include <libavutil/imgutils.h>
+#include <libavutil/opt.h>
+#include <libswresample/swresample.h>
+#include <libswscale/swscale.h>
 }
 #include <SDL2/SDL.h>
 #include <algorithm>
@@ -53,3593 +52,3398 @@ bool g_use_prefetched_jpeg = false;
 std::mutex g_prefetched_jpeg_mutex;
 
 // Audio debug logging helper
-#define AUDIO_LOG(msg)                                   \
-    do                                                   \
-    {                                                    \
-        if (g_audio_debug)                               \
-        {                                                \
-            std::cout << "[Audio] " << msg << std::endl; \
-        }                                                \
-    } while (0)
+#define AUDIO_LOG(msg)                                                         \
+  do {                                                                         \
+    if (g_audio_debug) {                                                       \
+      std::cout << "[Audio] " << msg << std::endl;                             \
+    }                                                                          \
+  } while (0)
 
 // Grid debug logging helper
-#define GRID_LOG(msg)                                   \
-    do                                                  \
-    {                                                   \
-        if (g_grid_debug)                               \
-        {                                               \
-            std::cout << "[Grid] " << msg << std::endl; \
-        }                                               \
-    } while (0)
+#define GRID_LOG(msg)                                                          \
+  do {                                                                         \
+    if (g_grid_debug) {                                                        \
+      std::cout << "[Grid] " << msg << std::endl;                              \
+    }                                                                          \
+  } while (0)
 
 // Motion-frame debug logging helper with timestamp
-#define MOTION_FRAME_LOG(msg)                                                   \
-    do                                                                          \
-    {                                                                           \
-        if (g_motion_frame_debug)                                               \
-        {                                                                       \
-            auto now = std::chrono::steady_clock::now();                        \
-            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(    \
-                          now.time_since_epoch())                               \
-                          .count();                                             \
-            double seconds = (ms % 100000) / 1000.0;                            \
-            std::cout << "[MotionFrame][" << std::fixed << std::setprecision(3) \
-                      << seconds << "s] " << msg << std::endl;                  \
-        }                                                                       \
-    } while (0)
+#define MOTION_FRAME_LOG(msg)                                                  \
+  do {                                                                         \
+    if (g_motion_frame_debug) {                                                \
+      auto now = std::chrono::steady_clock::now();                             \
+      auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(         \
+                    now.time_since_epoch())                                    \
+                    .count();                                                  \
+      double seconds = (ms % 100000) / 1000.0;                                 \
+      std::cout << "[MotionFrame][" << std::fixed << std::setprecision(3)      \
+                << seconds << "s] " << msg << std::endl;                       \
+    }                                                                          \
+  } while (0)
 
 // Performance debug logging helper
-#define PERF_LOG(msg)                                   \
-    do                                                  \
-    {                                                   \
-        if (g_perf_debug)                               \
-        {                                               \
-            std::cout << "[Perf] " << msg << std::endl; \
-        }                                               \
-    } while (0)
+#define PERF_LOG(msg)                                                          \
+  do {                                                                         \
+    if (g_perf_debug) {                                                        \
+      std::cout << "[Perf] " << msg << std::endl;                              \
+    }                                                                          \
+  } while (0)
 
-namespace
-{
-    using client_config::CameraConfig;
-    using client_config::ClientConfig;
-    using client_config::create_default_client_config;
-    using client_config::kClientConfigFileName;
-    using client_config::kUnknownCameraName;
-    using client_config::load_client_config;
-    using client_config::resolve_config_path;
-    using client_config::save_client_config;
-    using client_config::sync_json_from_client_config;
-    using client_network::build_proxy_rtsp_url;
-    using client_network::extract_host_from_endpoint;
-    using client_network::send_add_camera_request;
+namespace {
+using client_config::CameraConfig;
+using client_config::ClientConfig;
+using client_config::create_default_client_config;
+using client_config::kClientConfigFileName;
+using client_config::kUnknownCameraName;
+using client_config::load_client_config;
+using client_config::resolve_config_path;
+using client_config::save_client_config;
+using client_config::sync_json_from_client_config;
+using client_network::build_proxy_rtsp_url;
+using client_network::extract_host_from_endpoint;
+using client_network::send_add_camera_request;
 
-    constexpr int kDefaultCellWidth = 640;
-    constexpr int kDefaultCellHeight = 360;
-    constexpr std::chrono::milliseconds kStreamRetryInitialDelay{1500};
-    constexpr std::chrono::seconds kStreamStallThreshold{5};
-    constexpr std::chrono::seconds kStreamReadTimeout{5};
+constexpr int kDefaultCellWidth = 640;
+constexpr int kDefaultCellHeight = 360;
+constexpr std::chrono::milliseconds kStreamRetryInitialDelay{1500};
+constexpr std::chrono::seconds kStreamStallThreshold{5};
+constexpr std::chrono::seconds kStreamReadTimeout{5};
 
-    struct ProbeResult
-    {
-        bool success = false;
-        int width = 0;
-        int height = 0;
-        bool has_audio = false;
-        std::string error_message;
-    };
+struct ProbeResult {
+  bool success = false;
+  int width = 0;
+  int height = 0;
+  bool has_audio = false;
+  std::string error_message;
+};
 
 } // namespace
 
-struct AudioData
-{
-    std::deque<uint8_t> buffer;
-    std::mutex mutex;
-    std::atomic<int> volume_percent{100};
-    std::atomic<bool> muted{false};
+struct AudioData {
+  std::deque<uint8_t> buffer;
+  std::mutex mutex;
+  std::atomic<int> volume_percent{100};
+  std::atomic<bool> muted{false};
 };
 
 // SDL audio callback
-void audio_callback(void *userdata, Uint8 *stream, int len)
-{
-    if (g_audio_debug)
+void audio_callback(void *userdata, Uint8 *stream, int len) {
+  if (g_audio_debug) {
+    static int call_count = 0;
+    if (call_count++ % 100 == 0) // Log every 100th call
     {
-        static int call_count = 0;
-        if (call_count++ % 100 == 0) // Log every 100th call
-        {
-            std::cout << "[Audio] Callback requested " << len << " bytes" << std::endl;
-        }
-
-        if (call_count == 1)
-        {
-            AudioData *audio = (AudioData *)userdata;
-            std::lock_guard<std::mutex> lock(audio->mutex);
-            std::cout << "[Audio] Callback buffer size: " << audio->buffer.size() << " bytes" << std::endl;
-        }
+      std::cout << "[Audio] Callback requested " << len << " bytes"
+                << std::endl;
     }
 
-    AudioData *audio = (AudioData *)userdata;
-    std::lock_guard<std::mutex> lock(audio->mutex);
-
-    if (false) // Placeholder to keep structure
-    {
-        std::cout << "" << std::endl;
+    if (call_count == 1) {
+      AudioData *audio = (AudioData *)userdata;
+      std::lock_guard<std::mutex> lock(audio->mutex);
+      std::cout << "[Audio] Callback buffer size: " << audio->buffer.size()
+                << " bytes" << std::endl;
     }
+  }
 
-    int copied = 0;
-    while (!audio->buffer.empty() && copied < len)
-    {
-        stream[copied++] = audio->buffer.front();
-        audio->buffer.pop_front();
-    }
-    while (copied < len)
-        stream[copied++] = 0; // silence
+  AudioData *audio = (AudioData *)userdata;
+  std::lock_guard<std::mutex> lock(audio->mutex);
 
-    const bool muted = audio->muted.load(std::memory_order_relaxed);
-    const int volume_percent = audio->volume_percent.load(std::memory_order_relaxed);
+  if (false) // Placeholder to keep structure
+  {
+    std::cout << "" << std::endl;
+  }
 
-    if (muted || volume_percent <= 0)
-    {
-        std::memset(stream, 0, static_cast<size_t>(len));
-        return;
-    }
+  int copied = 0;
+  while (!audio->buffer.empty() && copied < len) {
+    stream[copied++] = audio->buffer.front();
+    audio->buffer.pop_front();
+  }
+  while (copied < len)
+    stream[copied++] = 0; // silence
 
-    if (volume_percent >= 100)
-    {
-        return;
-    }
+  const bool muted = audio->muted.load(std::memory_order_relaxed);
+  const int volume_percent =
+      audio->volume_percent.load(std::memory_order_relaxed);
 
-    // Wanted spec is AUDIO_S16SYS stereo; scale samples in-place.
-    const int sample_count = len / static_cast<int>(sizeof(int16_t));
-    auto *samples = reinterpret_cast<int16_t *>(stream);
-    for (int i = 0; i < sample_count; ++i)
-    {
-        int32_t scaled = (static_cast<int32_t>(samples[i]) * volume_percent) / 100;
-        scaled = std::clamp<int32_t>(scaled, -32768, 32767);
-        samples[i] = static_cast<int16_t>(scaled);
-    }
+  if (muted || volume_percent <= 0) {
+    std::memset(stream, 0, static_cast<size_t>(len));
+    return;
+  }
+
+  if (volume_percent >= 100) {
+    return;
+  }
+
+  // Wanted spec is AUDIO_S16SYS stereo; scale samples in-place.
+  const int sample_count = len / static_cast<int>(sizeof(int16_t));
+  auto *samples = reinterpret_cast<int16_t *>(stream);
+  for (int i = 0; i < sample_count; ++i) {
+    int32_t scaled = (static_cast<int32_t>(samples[i]) * volume_percent) / 100;
+    scaled = std::clamp<int32_t>(scaled, -32768, 32767);
+    samples[i] = static_cast<int16_t>(scaled);
+  }
 }
 
-struct StreamInterruptContext
-{
-    bool abort = false;
-    std::chrono::steady_clock::time_point deadline{};
+struct StreamInterruptContext {
+  bool abort = false;
+  std::chrono::steady_clock::time_point deadline{};
 };
 
-static int ffmpeg_interrupt_callback(void *opaque)
-{
-    auto *ctx = static_cast<StreamInterruptContext *>(opaque);
-    if (!ctx)
-    {
-        return 0;
-    }
-    if (ctx->abort)
-    {
-        return 1;
-    }
-    if (ctx->deadline != std::chrono::steady_clock::time_point{} &&
-        std::chrono::steady_clock::now() >= ctx->deadline)
-    {
-        return 1;
-    }
+static int ffmpeg_interrupt_callback(void *opaque) {
+  auto *ctx = static_cast<StreamInterruptContext *>(opaque);
+  if (!ctx) {
     return 0;
+  }
+  if (ctx->abort) {
+    return 1;
+  }
+  if (ctx->deadline != std::chrono::steady_clock::time_point{} &&
+      std::chrono::steady_clock::now() >= ctx->deadline) {
+    return 1;
+  }
+  return 0;
 }
 
-namespace
-{
-    ProbeResult probe_rtsp_stream(const std::string &url, std::chrono::seconds timeout = std::chrono::seconds(5))
-    {
-        ProbeResult result;
+namespace {
+ProbeResult
+probe_rtsp_stream(const std::string &url,
+                  std::chrono::seconds timeout = std::chrono::seconds(5)) {
+  ProbeResult result;
 
-        StreamInterruptContext interrupt_ctx;
-        AVFormatContext *fmt_ctx = avformat_alloc_context();
-        if (!fmt_ctx)
-        {
-            result.error_message = "Failed to allocate format context";
-            return result;
-        }
+  StreamInterruptContext interrupt_ctx;
+  AVFormatContext *fmt_ctx = avformat_alloc_context();
+  if (!fmt_ctx) {
+    result.error_message = "Failed to allocate format context";
+    return result;
+  }
 
-        fmt_ctx->interrupt_callback.callback = ffmpeg_interrupt_callback;
-        fmt_ctx->interrupt_callback.opaque = &interrupt_ctx;
+  fmt_ctx->interrupt_callback.callback = ffmpeg_interrupt_callback;
+  fmt_ctx->interrupt_callback.opaque = &interrupt_ctx;
 
-        AVDictionary *opts = nullptr;
-        av_dict_set(&opts, "rtsp_transport", "tcp", 0);
-        av_dict_set(&opts, "fflags", "nobuffer", 0);
-        av_dict_set(&opts, "max_delay", "500000", 0);
-        av_dict_set(&opts, "buffer_size", "1024000", 0);
-        av_dict_set(&opts, "rtsp_flags", "prefer_tcp", 0);
-        av_dict_set(&opts, "analyzeduration", "1000000", 0);
-        av_dict_set(&opts, "probesize", "1000000", 0);
-        av_dict_set(&opts, "stimeout", "5000000", 0); // 5 second timeout
+  AVDictionary *opts = nullptr;
+  av_dict_set(&opts, "rtsp_transport", "tcp", 0);
+  av_dict_set(&opts, "fflags", "nobuffer", 0);
+  av_dict_set(&opts, "max_delay", "500000", 0);
+  av_dict_set(&opts, "buffer_size", "1024000", 0);
+  av_dict_set(&opts, "rtsp_flags", "prefer_tcp", 0);
+  av_dict_set(&opts, "analyzeduration", "1000000", 0);
+  av_dict_set(&opts, "probesize", "1000000", 0);
+  av_dict_set(&opts, "stimeout", "5000000", 0); // 5 second timeout
 
-        interrupt_ctx.deadline = std::chrono::steady_clock::now() + timeout;
-        int open_result = avformat_open_input(&fmt_ctx, url.c_str(), nullptr, &opts);
-        av_dict_free(&opts);
+  interrupt_ctx.deadline = std::chrono::steady_clock::now() + timeout;
+  int open_result = avformat_open_input(&fmt_ctx, url.c_str(), nullptr, &opts);
+  av_dict_free(&opts);
 
-        if (open_result < 0)
-        {
-            char errbuf[AV_ERROR_MAX_STRING_SIZE] = {};
-            av_strerror(open_result, errbuf, sizeof(errbuf));
-            result.error_message = std::string("Failed to open: ") + errbuf;
-            avformat_close_input(&fmt_ctx);
-            return result;
-        }
+  if (open_result < 0) {
+    char errbuf[AV_ERROR_MAX_STRING_SIZE] = {};
+    av_strerror(open_result, errbuf, sizeof(errbuf));
+    result.error_message = std::string("Failed to open: ") + errbuf;
+    avformat_close_input(&fmt_ctx);
+    return result;
+  }
 
-        interrupt_ctx.deadline = std::chrono::steady_clock::now() + timeout;
-        if (avformat_find_stream_info(fmt_ctx, nullptr) < 0)
-        {
-            result.error_message = "Failed to find stream info";
-            avformat_close_input(&fmt_ctx);
-            return result;
-        }
-        interrupt_ctx.deadline = std::chrono::steady_clock::time_point{};
+  interrupt_ctx.deadline = std::chrono::steady_clock::now() + timeout;
+  if (avformat_find_stream_info(fmt_ctx, nullptr) < 0) {
+    result.error_message = "Failed to find stream info";
+    avformat_close_input(&fmt_ctx);
+    return result;
+  }
+  interrupt_ctx.deadline = std::chrono::steady_clock::time_point{};
 
-        // Find video stream
-        int video_stream_index = -1;
-        int audio_stream_index = -1;
+  // Find video stream
+  int video_stream_index = -1;
+  int audio_stream_index = -1;
 
-        for (unsigned i = 0; i < fmt_ctx->nb_streams; ++i)
-        {
-            AVStream *st = fmt_ctx->streams[i];
-            if (st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO && video_stream_index == -1)
-            {
-                video_stream_index = i;
-                result.width = st->codecpar->width;
-                result.height = st->codecpar->height;
-            }
-            else if (st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO && audio_stream_index == -1)
-            {
-                audio_stream_index = i;
-                result.has_audio = true;
-            }
-        }
-
-        avformat_close_input(&fmt_ctx);
-
-        if (video_stream_index == -1)
-        {
-            result.error_message = "No video stream found";
-            return result;
-        }
-
-        if (result.width <= 0 || result.height <= 0)
-        {
-            result.error_message = "Invalid video dimensions";
-            return result;
-        }
-
-        result.success = true;
-        return result;
+  for (unsigned i = 0; i < fmt_ctx->nb_streams; ++i) {
+    AVStream *st = fmt_ctx->streams[i];
+    if (st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO &&
+        video_stream_index == -1) {
+      video_stream_index = i;
+      result.width = st->codecpar->width;
+      result.height = st->codecpar->height;
+    } else if (st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO &&
+               audio_stream_index == -1) {
+      audio_stream_index = i;
+      result.has_audio = true;
     }
+  }
+
+  avformat_close_input(&fmt_ctx);
+
+  if (video_stream_index == -1) {
+    result.error_message = "No video stream found";
+    return result;
+  }
+
+  if (result.width <= 0 || result.height <= 0) {
+    result.error_message = "Invalid video dimensions";
+    return result;
+  }
+
+  result.success = true;
+  return result;
+}
 } // namespace
 
-struct VideoStreamCtx
-{
-    AVFormatContext *fmt_ctx = nullptr;
-    AVCodecContext *vctx = nullptr;
-    AVCodecContext *actx = nullptr; // only used for stream 0 (audio)
-    int video_stream_index = -1;
-    int audio_stream_index = -1;
-    SwsContext *sws = nullptr;
+struct VideoStreamCtx {
+  AVFormatContext *fmt_ctx = nullptr;
+  AVCodecContext *vctx = nullptr;
+  AVCodecContext *actx = nullptr; // only used for stream 0 (audio)
+  int video_stream_index = -1;
+  int audio_stream_index = -1;
+  SwsContext *sws = nullptr;
 
-    AVFrame *vframe = nullptr;
-    AVFrame *vframe_rgb = nullptr;
-    uint8_t *rgb_buffer = nullptr;
-    int rgb_linesize = 0;
+  AVFrame *vframe = nullptr;
+  AVFrame *vframe_rgb = nullptr;
+  uint8_t *rgb_buffer = nullptr;
+  int rgb_linesize = 0;
 
-    AVPacket *pkt = nullptr;
-    AVFrame *aframe = nullptr; // only used if audio
-    StreamInterruptContext interrupt_ctx;
-    int frame_width = 0;
-    int frame_height = 0;
-    AVPixelFormat frame_pix_fmt = AV_PIX_FMT_NONE;
-    std::thread worker;
-    std::mutex frame_mutex;
-    int64_t frame_generation = 0;
-    int64_t last_consumed_generation = -1;
-    bool frame_available = false;
-    std::atomic<bool> worker_stop{false};
-    std::atomic<bool> worker_failed{false};
-    std::atomic<bool> pending_reference_update{false};
-    std::atomic<bool> async_open_in_progress{false};
+  AVPacket *pkt = nullptr;
+  AVFrame *aframe = nullptr; // only used if audio
+  StreamInterruptContext interrupt_ctx;
+  int frame_width = 0;
+  int frame_height = 0;
+  AVPixelFormat frame_pix_fmt = AV_PIX_FMT_NONE;
+  std::thread worker;
+  std::mutex frame_mutex;
+  int64_t frame_generation = 0;
+  int64_t last_consumed_generation = -1;
+  bool frame_available = false;
+  std::atomic<bool> worker_stop{false};
+  std::atomic<bool> worker_failed{false};
+  std::atomic<bool> pending_reference_update{false};
+  std::atomic<bool> async_open_in_progress{false};
 };
 
-int main(int argc, char **argv)
-{
-    const int GRID_COLS = 2; // 4 for 4x4
-    const int GRID_ROWS = 2; // 4 for 4x4
-    const int TOTAL_SLOTS = GRID_COLS * GRID_ROWS;
+int main(int argc, char **argv) {
+  const int GRID_COLS = 2; // 4 for 4x4
+  const int GRID_ROWS = 2; // 4 for 4x4
+  const int TOTAL_SLOTS = GRID_COLS * GRID_ROWS;
 
-    // Parse command-line arguments for debug flags and RTSP URLs
-    std::vector<std::string> rtsp_urls;
-    for (int i = 1; i < argc; ++i)
-    {
-        std::string arg = argv[i];
-        if (arg == "--debug" && i + 1 < argc)
-        {
-            std::string debug_type = argv[++i];
-            if (debug_type == "audio")
-            {
-                g_audio_debug = true;
-                std::cout << "[Debug] Audio debugging enabled" << std::endl;
-            }
-            else if (debug_type == "grid")
-            {
-                g_grid_debug = true;
-                std::cout << "[Debug] Grid debugging enabled" << std::endl;
-            }
-            else if (debug_type == "perf")
-            {
-                g_perf_debug = true;
-                std::cout << "[Debug] Performance debugging enabled" << std::endl;
-            }
-            else if (debug_type == "all")
-            {
-                g_audio_debug = true;
-                g_grid_debug = true;
-                g_motion_frame_debug = true;
-                g_perf_debug = true;
-                std::cout << "[Debug] All debugging enabled" << std::endl;
-            }
-            else if (debug_type == "motion-frame")
-            {
-                g_motion_frame_debug = true;
-                std::cout << "[Debug] Motion-frame debugging enabled" << std::endl;
-            }
-            else
-            {
-                std::cerr << "Unknown debug type: " << debug_type << std::endl;
-                std::cerr << "Available types: audio, grid, motion-frame, perf, all" << std::endl;
-            }
-        }
-        else if (arg.find("rtsp://") == 0)
-        {
-            rtsp_urls.push_back(arg);
-        }
+  // Parse command-line arguments for debug flags and RTSP URLs
+  std::vector<std::string> rtsp_urls;
+  for (int i = 1; i < argc; ++i) {
+    std::string arg = argv[i];
+    if (arg == "--debug" && i + 1 < argc) {
+      std::string debug_type = argv[++i];
+      if (debug_type == "audio") {
+        g_audio_debug = true;
+        std::cout << "[Debug] Audio debugging enabled" << std::endl;
+      } else if (debug_type == "grid") {
+        g_grid_debug = true;
+        std::cout << "[Debug] Grid debugging enabled" << std::endl;
+      } else if (debug_type == "perf") {
+        g_perf_debug = true;
+        std::cout << "[Debug] Performance debugging enabled" << std::endl;
+      } else if (debug_type == "all") {
+        g_audio_debug = true;
+        g_grid_debug = true;
+        g_motion_frame_debug = true;
+        g_perf_debug = true;
+        std::cout << "[Debug] All debugging enabled" << std::endl;
+      } else if (debug_type == "motion-frame") {
+        g_motion_frame_debug = true;
+        std::cout << "[Debug] Motion-frame debugging enabled" << std::endl;
+      } else {
+        std::cerr << "Unknown debug type: " << debug_type << std::endl;
+        std::cerr << "Available types: audio, grid, motion-frame, perf, all"
+                  << std::endl;
+      }
+    } else if (arg.find("rtsp://") == 0) {
+      rtsp_urls.push_back(arg);
     }
+  }
 
-    std::vector<CameraConfig> stream_configs;
-    std::filesystem::path config_path;
+  std::vector<CameraConfig> stream_configs;
+  std::filesystem::path config_path;
 
-    // Check for CONFIG_PATH environment variable
-    const char *env_config_path = std::getenv("CONFIG_PATH");
-    if (env_config_path && *env_config_path)
-    {
-        config_path = env_config_path;
+  // Check for CONFIG_PATH environment variable
+  const char *env_config_path = std::getenv("CONFIG_PATH");
+  if (env_config_path && *env_config_path) {
+    config_path = env_config_path;
+  } else {
+    config_path = resolve_config_path(argv[0]);
+  }
+
+  nlohmann::json client_config_json = nlohmann::json::object();
+  ClientConfig client_config;
+  bool config_loaded = false;
+  bool placeholder_dimensions = false;
+
+  if (!rtsp_urls.empty()) {
+    int provided_streams = static_cast<int>(rtsp_urls.size());
+    if (provided_streams > TOTAL_SLOTS) {
+      std::cerr << "Warning: ignoring extra RTSP URLs beyond " << TOTAL_SLOTS
+                << " slots." << "\n";
     }
-    else
-    {
-        config_path = resolve_config_path(argv[0]);
+    stream_configs.reserve(std::min(provided_streams, TOTAL_SLOTS));
+    for (int i = 0; i < std::min(provided_streams, TOTAL_SLOTS); ++i) {
+      CameraConfig camera;
+      camera.ip = rtsp_urls[i];
+      camera.name = camera.ip;
+      stream_configs.push_back(std::move(camera));
     }
-
-    nlohmann::json client_config_json = nlohmann::json::object();
-    ClientConfig client_config;
-    bool config_loaded = false;
-    bool placeholder_dimensions = false;
-
-    if (!rtsp_urls.empty())
-    {
-        int provided_streams = static_cast<int>(rtsp_urls.size());
-        if (provided_streams > TOTAL_SLOTS)
-        {
-            std::cerr << "Warning: ignoring extra RTSP URLs beyond " << TOTAL_SLOTS << " slots." << "\n";
-        }
-        stream_configs.reserve(std::min(provided_streams, TOTAL_SLOTS));
-        for (int i = 0; i < std::min(provided_streams, TOTAL_SLOTS); ++i)
-        {
-            CameraConfig camera;
-            camera.ip = rtsp_urls[i];
-            camera.name = camera.ip;
-            stream_configs.push_back(std::move(camera));
-        }
+  } else {
+    try {
+      client_config = load_client_config(config_path, client_config_json);
+      config_loaded = true;
+      stream_configs = client_config.cameras;
+    } catch (const std::exception &err) {
+      std::cerr << err.what() << "\n";
+      return 1;
     }
-    else
-    {
-        try
-        {
-            client_config = load_client_config(config_path, client_config_json);
-            config_loaded = true;
-            stream_configs = client_config.cameras;
-        }
-        catch (const std::exception &err)
-        {
-            std::cerr << err.what() << "\n";
-            return 1;
-        }
-        if (stream_configs.size() > static_cast<size_t>(TOTAL_SLOTS))
-        {
-            std::cerr << "Warning: more cameras than available slots; truncating to "
-                      << TOTAL_SLOTS << " entries from config." << "\n";
-            stream_configs.resize(TOTAL_SLOTS);
-            client_config.cameras = stream_configs;
-        }
+    if (stream_configs.size() > static_cast<size_t>(TOTAL_SLOTS)) {
+      std::cerr << "Warning: more cameras than available slots; truncating to "
+                << TOTAL_SLOTS << " entries from config." << "\n";
+      stream_configs.resize(TOTAL_SLOTS);
+      client_config.cameras = stream_configs;
     }
+  }
 
-    if (!config_loaded)
-    {
-        client_config.cameras = stream_configs;
+  if (!config_loaded) {
+    client_config.cameras = stream_configs;
+  }
+
+  if (client_config.server_endpoint.empty()) {
+    client_config.server_endpoint = "http://localhost:8080";
+  }
+  if (client_config.server_ip.empty()) {
+    client_config.server_ip =
+        extract_host_from_endpoint(client_config.server_endpoint);
+  }
+
+  if (stream_configs.empty()) {
+    std::cout
+        << "No camera streams configured; starting with an empty dashboard."
+        << "\n";
+    placeholder_dimensions = true;
+  }
+
+  av_log_set_level(AV_LOG_ERROR);
+  avformat_network_init();
+
+  // Initialize SDL
+  if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_TIMER) != 0) {
+    std::cerr << "SDL_Init error: " << SDL_GetError() << "\n";
+    return 1;
+  }
+
+  // We assume all streams have the same resolution; we’ll use stream 0 as
+  // reference
+  int single_w = 0;
+  int single_h = 0;
+  bool reference_dimensions_ready = false;
+
+  std::size_t limited_streams =
+      std::min(stream_configs.size(), static_cast<std::size_t>(TOTAL_SLOTS));
+  int stream_count = static_cast<int>(limited_streams);
+  stream_configs.resize(stream_count);
+  std::vector<std::string> stream_urls(stream_count);
+  std::vector<std::string> stream_names(stream_count);
+  for (int i = 0; i < stream_count; ++i) {
+    stream_urls[i] = stream_configs[i].ip;
+    stream_names[i] = stream_configs[i].name.empty() ? kUnknownCameraName
+                                                     : stream_configs[i].name;
+  }
+
+  GRID_LOG("Initial config: stream_count=" << stream_count
+                                           << ", GRID_COLS=" << GRID_COLS
+                                           << ", GRID_ROWS=" << GRID_ROWS);
+
+  ConfigurationWindowSettings window_settings = client_config.window_settings;
+
+  auto persist_config = [&]() -> bool {
+    client_config.cameras = stream_configs;
+    try {
+      sync_json_from_client_config(client_config_json, client_config);
+      save_client_config(client_config_json, config_path);
+      return true;
+    } catch (const std::exception &err) {
+      std::cerr << "Failed to persist configuration: " << err.what() << "\n";
+      return false;
     }
+  };
 
-    if (client_config.server_endpoint.empty())
-    {
-        client_config.server_endpoint = "http://localhost:8080";
-    }
-    if (client_config.server_ip.empty())
-    {
-        client_config.server_ip = extract_host_from_endpoint(client_config.server_endpoint);
-    }
-
-    if (stream_configs.empty())
-    {
-        std::cout << "No camera streams configured; starting with an empty dashboard." << "\n";
-        placeholder_dimensions = true;
-    }
-
-    av_log_set_level(AV_LOG_ERROR);
-    avformat_network_init();
-
-    // Initialize SDL
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_TIMER) != 0)
-    {
-        std::cerr << "SDL_Init error: " << SDL_GetError() << "\n";
-        return 1;
-    }
-
-    // We assume all streams have the same resolution; we’ll use stream 0 as reference
-    int single_w = 0;
-    int single_h = 0;
-    bool reference_dimensions_ready = false;
-
-    std::size_t limited_streams = std::min(stream_configs.size(), static_cast<std::size_t>(TOTAL_SLOTS));
-    int stream_count = static_cast<int>(limited_streams);
-    stream_configs.resize(stream_count);
-    std::vector<std::string> stream_urls(stream_count);
-    std::vector<std::string> stream_names(stream_count);
-    for (int i = 0; i < stream_count; ++i)
-    {
-        stream_urls[i] = stream_configs[i].ip;
-        stream_names[i] = stream_configs[i].name.empty() ? kUnknownCameraName : stream_configs[i].name;
-    }
-
-    GRID_LOG("Initial config: stream_count=" << stream_count << ", GRID_COLS=" << GRID_COLS << ", GRID_ROWS=" << GRID_ROWS);
-
-    ConfigurationWindowSettings window_settings = client_config.window_settings;
-
-    auto persist_config = [&]() -> bool
-    {
-        client_config.cameras = stream_configs;
-        try
-        {
-            sync_json_from_client_config(client_config_json, client_config);
-            save_client_config(client_config_json, config_path);
-            return true;
-        }
-        catch (const std::exception &err)
-        {
-            std::cerr << "Failed to persist configuration: " << err.what() << "\n";
-            return false;
-        }
-    };
-
-    auto persist_window_settings = [&](const ConfigurationWindowSettings &settings)
-    {
+  auto persist_window_settings =
+      [&](const ConfigurationWindowSettings &settings) {
         client_config.window_settings = settings;
         persist_config();
-    };
+      };
 
-    std::deque<VideoStreamCtx> streams(stream_count);
-    std::vector<bool> overlay_always_show_stream(stream_count, false);
-    overlay_always_show_stream.reserve(TOTAL_SLOTS);
-    std::vector<std::chrono::steady_clock::time_point> stream_retry_deadlines(stream_count);
-    stream_retry_deadlines.reserve(TOTAL_SLOTS);
-    std::vector<std::chrono::steady_clock::time_point> stream_last_frame_times(stream_count);
-    stream_last_frame_times.reserve(TOTAL_SLOTS);
-    std::vector<bool> stream_stall_reported(stream_count, false);
-    stream_stall_reported.reserve(TOTAL_SLOTS);
-    std::mutex stream_state_mutex;
+  std::deque<VideoStreamCtx> streams(stream_count);
+  std::vector<bool> overlay_always_show_stream(stream_count, false);
+  overlay_always_show_stream.reserve(TOTAL_SLOTS);
+  std::vector<std::chrono::steady_clock::time_point> stream_retry_deadlines(
+      stream_count);
+  stream_retry_deadlines.reserve(TOTAL_SLOTS);
+  std::vector<std::chrono::steady_clock::time_point> stream_last_frame_times(
+      stream_count);
+  stream_last_frame_times.reserve(TOTAL_SLOTS);
+  std::vector<bool> stream_stall_reported(stream_count, false);
+  stream_stall_reported.reserve(TOTAL_SLOTS);
+  std::mutex stream_state_mutex;
 
-    SwrContext *swr = nullptr;
-    AudioData audio_data;
-    SDL_AudioSpec wanted_spec{};
-    bool audio_device_open = false;
-    std::atomic<int> active_audio_stream{0}; // Track which stream provides audio
+  SwrContext *swr = nullptr;
+  AudioData audio_data;
+  SDL_AudioSpec wanted_spec{};
+  bool audio_device_open = false;
+  std::atomic<int> active_audio_stream{0}; // Track which stream provides audio
 
-    // Audio source switch notification
-    std::string audio_switch_notification;
-    std::chrono::steady_clock::time_point audio_switch_notification_time;
-    const std::chrono::milliseconds kNotificationDisplayDuration{2500};
-    const std::chrono::milliseconds kNotificationFadeInDuration{150};
-    const std::chrono::milliseconds kNotificationFadeOutDuration{300};
+  // Audio source switch notification
+  std::string audio_switch_notification;
+  std::chrono::steady_clock::time_point audio_switch_notification_time;
+  const std::chrono::milliseconds kNotificationDisplayDuration{2500};
+  const std::chrono::milliseconds kNotificationFadeInDuration{150};
+  const std::chrono::milliseconds kNotificationFadeOutDuration{300};
 
-    const std::chrono::milliseconds kOverlayAutoHideDuration{3000};
-    std::chrono::steady_clock::time_point last_pointer_activity_time = std::chrono::steady_clock::now();
-    std::chrono::steady_clock::time_point audio_controls_last_interaction_time = std::chrono::steady_clock::now();
+  const std::chrono::milliseconds kOverlayAutoHideDuration{3000};
+  std::chrono::steady_clock::time_point last_pointer_activity_time =
+      std::chrono::steady_clock::now();
+  std::chrono::steady_clock::time_point audio_controls_last_interaction_time =
+      std::chrono::steady_clock::now();
 
-    auto record_stream_open = [&](int idx)
+  auto record_stream_open = [&](int idx) {
+    if (idx < 0 || idx >= static_cast<int>(stream_last_frame_times.size())) {
+      return;
+    }
+    std::lock_guard<std::mutex> lock(stream_state_mutex);
+    stream_last_frame_times[idx] = std::chrono::steady_clock::now();
+    stream_stall_reported[idx] = false;
+    if (idx < static_cast<int>(stream_retry_deadlines.size())) {
+      stream_retry_deadlines[idx] = std::chrono::steady_clock::time_point{};
+    }
+  };
+
+  auto schedule_stream_retry = [&](int idx, std::chrono::milliseconds delay) {
+    if (idx < 0 || idx >= static_cast<int>(stream_retry_deadlines.size())) {
+      return;
+    }
     {
-        if (idx < 0 || idx >= static_cast<int>(stream_last_frame_times.size()))
-        {
-            return;
-        }
-        std::lock_guard<std::mutex> lock(stream_state_mutex);
-        stream_last_frame_times[idx] = std::chrono::steady_clock::now();
+      std::lock_guard<std::mutex> lock(stream_state_mutex);
+      if (idx < static_cast<int>(stream_stall_reported.size())) {
         stream_stall_reported[idx] = false;
-        if (idx < static_cast<int>(stream_retry_deadlines.size()))
-        {
-            stream_retry_deadlines[idx] = std::chrono::steady_clock::time_point{};
-        }
-    };
-
-    auto schedule_stream_retry = [&](int idx, std::chrono::milliseconds delay)
-    {
-        if (idx < 0 || idx >= static_cast<int>(stream_retry_deadlines.size()))
-        {
-            return;
-        }
-        {
-            std::lock_guard<std::mutex> lock(stream_state_mutex);
-            if (idx < static_cast<int>(stream_stall_reported.size()))
-            {
-                stream_stall_reported[idx] = false;
-            }
-            if (idx < static_cast<int>(stream_last_frame_times.size()))
-            {
-                stream_last_frame_times[idx] = std::chrono::steady_clock::time_point{};
-            }
-            stream_retry_deadlines[idx] = std::chrono::steady_clock::now() + delay;
-        }
-        std::string stream_label = (idx < static_cast<int>(stream_names.size()) && !stream_names[idx].empty())
-                                       ? stream_names[idx]
-                                       : ("Stream " + std::to_string(idx));
-        std::ostringstream oss;
-        oss << std::fixed << std::setprecision(1) << std::chrono::duration<double>(delay).count();
+      }
+      if (idx < static_cast<int>(stream_last_frame_times.size())) {
+        stream_last_frame_times[idx] = std::chrono::steady_clock::time_point{};
+      }
+      stream_retry_deadlines[idx] = std::chrono::steady_clock::now() + delay;
+    }
+    std::string stream_label = (idx < static_cast<int>(stream_names.size()) &&
+                                !stream_names[idx].empty())
+                                   ? stream_names[idx]
+                                   : ("Stream " + std::to_string(idx));
+    std::ostringstream oss;
+    oss << std::fixed << std::setprecision(1)
+        << std::chrono::duration<double>(delay).count();
 #ifdef DEBUG_LOGGING
-        std::cerr << "[diag] Stream \"" << stream_label << "\" retry scheduled in " << oss.str() << "s\n";
+    std::cerr << "[diag] Stream \"" << stream_label << "\" retry scheduled in "
+              << oss.str() << "s\n";
 #endif
-    };
+  };
 
-    int canvas_w = 0;
-    int canvas_h = 0;
-    std::vector<uint8_t> canvas_buffer;
-    uint8_t *canvas_data[4] = {nullptr, nullptr, nullptr, nullptr};
-    int canvas_linesize[4] = {0, 0, 0, 0};
-    SDL_Window *win = nullptr;
-    SDL_Renderer *renderer = nullptr;
-    SDL_Texture *texture = nullptr;
-    std::function<bool(int, int, bool)> ensure_canvas_dimensions;
+  int canvas_w = 0;
+  int canvas_h = 0;
+  std::vector<uint8_t> canvas_buffer;
+  uint8_t *canvas_data[4] = {nullptr, nullptr, nullptr, nullptr};
+  int canvas_linesize[4] = {0, 0, 0, 0};
+  SDL_Window *win = nullptr;
+  SDL_Renderer *renderer = nullptr;
+  SDL_Texture *texture = nullptr;
+  std::function<bool(int, int, bool)> ensure_canvas_dimensions;
 
-    auto stop_stream_worker = [&](VideoStreamCtx &s)
-    {
-        s.worker_stop.store(true);
-        s.interrupt_ctx.abort = true;
-        if (s.worker.joinable())
-        {
-            s.worker.join();
-        }
-        s.worker_stop.store(false);
-    };
+  auto stop_stream_worker = [&](VideoStreamCtx &s) {
+    s.worker_stop.store(true);
+    s.interrupt_ctx.abort = true;
+    if (s.worker.joinable()) {
+      s.worker.join();
+    }
+    s.worker_stop.store(false);
+  };
 
-    auto release_stream = [&](VideoStreamCtx &s)
-    {
-        stop_stream_worker(s);
+  auto release_stream = [&](VideoStreamCtx &s) {
+    stop_stream_worker(s);
 
-        // Stop any async open in progress by setting abort flag
-        s.interrupt_ctx.abort = true;
-        s.async_open_in_progress.store(false);
+    // Stop any async open in progress by setting abort flag
+    s.interrupt_ctx.abort = true;
+    s.async_open_in_progress.store(false);
 
-        s.interrupt_ctx.deadline = std::chrono::steady_clock::time_point{};
-        if (s.pkt)
-        {
-            av_packet_free(&s.pkt);
-            s.pkt = nullptr;
-        }
-        if (s.aframe)
-        {
-            av_frame_free(&s.aframe);
-            s.aframe = nullptr;
-        }
-        if (s.vframe)
-        {
-            av_frame_free(&s.vframe);
-            s.vframe = nullptr;
-        }
-        if (s.vframe_rgb)
-        {
-            av_frame_free(&s.vframe_rgb);
-            s.vframe_rgb = nullptr;
-        }
-        if (s.rgb_buffer)
-        {
-            av_free(s.rgb_buffer);
-            s.rgb_buffer = nullptr;
-        }
-        if (s.sws)
-        {
-            sws_freeContext(s.sws);
-            s.sws = nullptr;
-        }
-        if (s.vctx)
-        {
-            avcodec_free_context(&s.vctx);
-            s.vctx = nullptr;
-        }
-        if (s.actx)
-        {
-            avcodec_free_context(&s.actx);
-            s.actx = nullptr;
-        }
-        if (s.fmt_ctx)
-        {
-            s.fmt_ctx->interrupt_callback.callback = nullptr;
-            s.fmt_ctx->interrupt_callback.opaque = nullptr;
-            avformat_close_input(&s.fmt_ctx);
-            s.fmt_ctx = nullptr;
-        }
-        s.video_stream_index = -1;
-        s.audio_stream_index = -1;
-        s.rgb_linesize = 0;
-        s.interrupt_ctx = {};
-        s.frame_width = 0;
-        s.frame_height = 0;
-        s.frame_pix_fmt = AV_PIX_FMT_NONE;
-        s.frame_generation = 0;
-        s.last_consumed_generation = -1;
-        s.frame_available = false;
-        s.worker_failed.store(false);
-        s.pending_reference_update.store(false);
-    };
+    s.interrupt_ctx.deadline = std::chrono::steady_clock::time_point{};
+    if (s.pkt) {
+      av_packet_free(&s.pkt);
+      s.pkt = nullptr;
+    }
+    if (s.aframe) {
+      av_frame_free(&s.aframe);
+      s.aframe = nullptr;
+    }
+    if (s.vframe) {
+      av_frame_free(&s.vframe);
+      s.vframe = nullptr;
+    }
+    if (s.vframe_rgb) {
+      av_frame_free(&s.vframe_rgb);
+      s.vframe_rgb = nullptr;
+    }
+    if (s.rgb_buffer) {
+      av_free(s.rgb_buffer);
+      s.rgb_buffer = nullptr;
+    }
+    if (s.sws) {
+      sws_freeContext(s.sws);
+      s.sws = nullptr;
+    }
+    if (s.vctx) {
+      avcodec_free_context(&s.vctx);
+      s.vctx = nullptr;
+    }
+    if (s.actx) {
+      avcodec_free_context(&s.actx);
+      s.actx = nullptr;
+    }
+    if (s.fmt_ctx) {
+      s.fmt_ctx->interrupt_callback.callback = nullptr;
+      s.fmt_ctx->interrupt_callback.opaque = nullptr;
+      avformat_close_input(&s.fmt_ctx);
+      s.fmt_ctx = nullptr;
+    }
+    s.video_stream_index = -1;
+    s.audio_stream_index = -1;
+    s.rgb_linesize = 0;
+    s.interrupt_ctx = {};
+    s.frame_width = 0;
+    s.frame_height = 0;
+    s.frame_pix_fmt = AV_PIX_FMT_NONE;
+    s.frame_generation = 0;
+    s.last_consumed_generation = -1;
+    s.frame_available = false;
+    s.worker_failed.store(false);
+    s.pending_reference_update.store(false);
+  };
 
-    auto configure_scaler = [&](VideoStreamCtx &stream, int width, int height, AVPixelFormat src_fmt, const std::string &label) -> bool
-    {
-        stream.frame_width = 0;
-        stream.frame_height = 0;
-        stream.frame_pix_fmt = AV_PIX_FMT_NONE;
+  auto configure_scaler = [&](VideoStreamCtx &stream, int width, int height,
+                              AVPixelFormat src_fmt,
+                              const std::string &label) -> bool {
+    stream.frame_width = 0;
+    stream.frame_height = 0;
+    stream.frame_pix_fmt = AV_PIX_FMT_NONE;
 
-        if (width <= 0 || height <= 0)
-        {
-            std::cerr << "Invalid frame dimensions for stream " << label << ": " << width << "x" << height << "\n";
-            return false;
-        }
+    if (width <= 0 || height <= 0) {
+      std::cerr << "Invalid frame dimensions for stream " << label << ": "
+                << width << "x" << height << "\n";
+      return false;
+    }
 
-        if (stream.sws)
-        {
-            sws_freeContext(stream.sws);
-            stream.sws = nullptr;
-        }
-        if (stream.vframe_rgb)
-        {
-            av_frame_free(&stream.vframe_rgb);
-            stream.vframe_rgb = nullptr;
-        }
-        if (stream.rgb_buffer)
-        {
-            av_free(stream.rgb_buffer);
-            stream.rgb_buffer = nullptr;
-        }
-        stream.rgb_linesize = 0;
+    if (stream.sws) {
+      sws_freeContext(stream.sws);
+      stream.sws = nullptr;
+    }
+    if (stream.vframe_rgb) {
+      av_frame_free(&stream.vframe_rgb);
+      stream.vframe_rgb = nullptr;
+    }
+    if (stream.rgb_buffer) {
+      av_free(stream.rgb_buffer);
+      stream.rgb_buffer = nullptr;
+    }
+    stream.rgb_linesize = 0;
 
-        stream.sws = sws_getContext(
-            width, height, src_fmt,
-            width, height, AV_PIX_FMT_RGB24,
-            SWS_BILINEAR, nullptr, nullptr, nullptr);
-        if (!stream.sws)
-        {
-            std::cerr << "Failed to create scaler for stream " << label << " (" << width << "x" << height << ")\n";
-            return false;
-        }
+    stream.sws =
+        sws_getContext(width, height, src_fmt, width, height, AV_PIX_FMT_RGB24,
+                       SWS_BILINEAR, nullptr, nullptr, nullptr);
+    if (!stream.sws) {
+      std::cerr << "Failed to create scaler for stream " << label << " ("
+                << width << "x" << height << ")\n";
+      return false;
+    }
 
-        stream.vframe_rgb = av_frame_alloc();
-        if (!stream.vframe_rgb)
-        {
-            std::cerr << "Failed to allocate RGB frame for stream " << label << "\n";
-            sws_freeContext(stream.sws);
-            stream.sws = nullptr;
-            return false;
-        }
+    stream.vframe_rgb = av_frame_alloc();
+    if (!stream.vframe_rgb) {
+      std::cerr << "Failed to allocate RGB frame for stream " << label << "\n";
+      sws_freeContext(stream.sws);
+      stream.sws = nullptr;
+      return false;
+    }
 
-        int num_bytes = av_image_get_buffer_size(AV_PIX_FMT_RGB24, width, height, 1);
-        if (num_bytes <= 0)
-        {
-            std::cerr << "Invalid RGB buffer size for stream " << label << "\n";
-            av_frame_free(&stream.vframe_rgb);
-            stream.vframe_rgb = nullptr;
-            sws_freeContext(stream.sws);
-            stream.sws = nullptr;
-            return false;
-        }
+    int num_bytes =
+        av_image_get_buffer_size(AV_PIX_FMT_RGB24, width, height, 1);
+    if (num_bytes <= 0) {
+      std::cerr << "Invalid RGB buffer size for stream " << label << "\n";
+      av_frame_free(&stream.vframe_rgb);
+      stream.vframe_rgb = nullptr;
+      sws_freeContext(stream.sws);
+      stream.sws = nullptr;
+      return false;
+    }
 
-        stream.rgb_buffer = static_cast<uint8_t *>(av_malloc(num_bytes));
-        if (!stream.rgb_buffer)
-        {
-            std::cerr << "Failed to allocate RGB buffer for stream " << label << "\n";
-            av_frame_free(&stream.vframe_rgb);
-            stream.vframe_rgb = nullptr;
-            sws_freeContext(stream.sws);
-            stream.sws = nullptr;
-            return false;
-        }
+    stream.rgb_buffer = static_cast<uint8_t *>(av_malloc(num_bytes));
+    if (!stream.rgb_buffer) {
+      std::cerr << "Failed to allocate RGB buffer for stream " << label << "\n";
+      av_frame_free(&stream.vframe_rgb);
+      stream.vframe_rgb = nullptr;
+      sws_freeContext(stream.sws);
+      stream.sws = nullptr;
+      return false;
+    }
 
-        if (av_image_fill_arrays(
-                stream.vframe_rgb->data, stream.vframe_rgb->linesize,
-                stream.rgb_buffer, AV_PIX_FMT_RGB24,
-                width, height, 1) < 0)
-        {
-            std::cerr << "Failed to setup RGB frame for stream " << label << "\n";
-            av_free(stream.rgb_buffer);
-            stream.rgb_buffer = nullptr;
-            av_frame_free(&stream.vframe_rgb);
-            stream.vframe_rgb = nullptr;
-            sws_freeContext(stream.sws);
-            stream.sws = nullptr;
-            return false;
-        }
+    if (av_image_fill_arrays(stream.vframe_rgb->data,
+                             stream.vframe_rgb->linesize, stream.rgb_buffer,
+                             AV_PIX_FMT_RGB24, width, height, 1) < 0) {
+      std::cerr << "Failed to setup RGB frame for stream " << label << "\n";
+      av_free(stream.rgb_buffer);
+      stream.rgb_buffer = nullptr;
+      av_frame_free(&stream.vframe_rgb);
+      stream.vframe_rgb = nullptr;
+      sws_freeContext(stream.sws);
+      stream.sws = nullptr;
+      return false;
+    }
 
-        stream.rgb_linesize = stream.vframe_rgb->linesize[0];
-        stream.frame_width = width;
-        stream.frame_height = height;
-        stream.frame_pix_fmt = src_fmt;
-        return true;
-    };
+    stream.rgb_linesize = stream.vframe_rgb->linesize[0];
+    stream.frame_width = width;
+    stream.frame_height = height;
+    stream.frame_pix_fmt = src_fmt;
+    return true;
+  };
 
-    auto open_stream = [&](int idx, const std::string &url, bool set_reference) -> bool
-    {
-        if (idx < 0 || idx >= stream_count)
-        {
-            return false;
-        }
-        VideoStreamCtx &s = streams[idx];
-        release_stream(s);
+  auto open_stream = [&](int idx, const std::string &url,
+                         bool set_reference) -> bool {
+    if (idx < 0 || idx >= stream_count) {
+      return false;
+    }
+    VideoStreamCtx &s = streams[idx];
+    release_stream(s);
 
-        s.worker_stop.store(false);
-        s.worker_failed.store(false);
-        s.pending_reference_update.store(false);
-        s.last_consumed_generation = -1;
-        s.frame_generation = 0;
-        s.frame_available = false;
+    s.worker_stop.store(false);
+    s.worker_failed.store(false);
+    s.pending_reference_update.store(false);
+    s.last_consumed_generation = -1;
+    s.frame_generation = 0;
+    s.frame_available = false;
 
-        s.interrupt_ctx = {};
-        s.fmt_ctx = avformat_alloc_context();
-        if (!s.fmt_ctx)
-        {
-            std::cerr << "Failed to allocate format context for: " << url << "\n";
-            return false;
-        }
-        s.fmt_ctx->interrupt_callback.callback = ffmpeg_interrupt_callback;
-        s.fmt_ctx->interrupt_callback.opaque = &s.interrupt_ctx;
+    s.interrupt_ctx = {};
+    s.fmt_ctx = avformat_alloc_context();
+    if (!s.fmt_ctx) {
+      std::cerr << "Failed to allocate format context for: " << url << "\n";
+      return false;
+    }
+    s.fmt_ctx->interrupt_callback.callback = ffmpeg_interrupt_callback;
+    s.fmt_ctx->interrupt_callback.opaque = &s.interrupt_ctx;
 
-        // Apply camera-specific RTSP settings
-        const CameraConfig& config = stream_configs[idx];
-        AVDictionary *opts = nullptr;
-        av_dict_set(&opts, "rtsp_transport", config.rtsp_transport.c_str(), 0);
-        if (config.fflags_nobuffer)
-        {
-            av_dict_set(&opts, "fflags", "nobuffer", 0);
-        }
-        av_dict_set(&opts, "max_delay", std::to_string(config.max_delay_ms * 1000).c_str(), 0);
-        av_dict_set(&opts, "buffer_size", std::to_string(config.buffer_size_kb * 1024).c_str(), 0);
-        if (config.rtsp_flags_prefer_tcp)
-        {
-            av_dict_set(&opts, "rtsp_flags", "prefer_tcp", 0);
-        }
-        av_dict_set(&opts, "analyzeduration", std::to_string(config.analyzeduration_ms * 1000).c_str(), 0);
-        av_dict_set(&opts, "probesize", std::to_string(config.probesize_kb * 1024).c_str(), 0);
-        av_dict_set(&opts, "stimeout", std::to_string(config.rtsp_timeout_seconds * 1000000).c_str(), 0);
-        
-        if (config.low_latency)
-        {
-            av_dict_set(&opts, "fflags", "+nobuffer+fastseek+flush_packets", 0);
-        }
-        
-        if (!config.hwaccel.empty())
-        {
-            av_dict_set(&opts, "hwaccel", config.hwaccel.c_str(), 0);
-        }
-        
-        if (config.thread_count > 0)
-        {
-            av_dict_set(&opts, "threads", std::to_string(config.thread_count).c_str(), 0);
-        }
+    // Apply camera-specific RTSP settings
+    const CameraConfig &config = stream_configs[idx];
+    AVDictionary *opts = nullptr;
+    av_dict_set(&opts, "rtsp_transport", config.rtsp_transport.c_str(), 0);
+    if (config.fflags_nobuffer) {
+      av_dict_set(&opts, "fflags", "nobuffer", 0);
+    }
+    av_dict_set(&opts, "max_delay",
+                std::to_string(config.max_delay_ms * 1000).c_str(), 0);
+    av_dict_set(&opts, "buffer_size",
+                std::to_string(config.buffer_size_kb * 1024).c_str(), 0);
+    if (config.rtsp_flags_prefer_tcp) {
+      av_dict_set(&opts, "rtsp_flags", "prefer_tcp", 0);
+    }
+    av_dict_set(&opts, "analyzeduration",
+                std::to_string(config.analyzeduration_ms * 1000).c_str(), 0);
+    av_dict_set(&opts, "probesize",
+                std::to_string(config.probesize_kb * 1024).c_str(), 0);
+    av_dict_set(&opts, "stimeout",
+                std::to_string(config.rtsp_timeout_seconds * 1000000).c_str(),
+                0);
 
-        s.interrupt_ctx.deadline = std::chrono::steady_clock::now() + kStreamReadTimeout;
-        if (avformat_open_input(&s.fmt_ctx, url.c_str(), nullptr, &opts) < 0)
-        {
-            std::cerr << "Could not open input: " << url << "\n";
-            av_dict_free(&opts);
-            release_stream(s);
-            return false;
-        }
-        av_dict_free(&opts);
+    if (config.low_latency) {
+      av_dict_set(&opts, "fflags", "+nobuffer+fastseek+flush_packets", 0);
+    }
 
-        s.interrupt_ctx.deadline = std::chrono::steady_clock::now() + kStreamReadTimeout;
-        if (avformat_find_stream_info(s.fmt_ctx, nullptr) < 0)
-        {
-            std::cerr << "Could not find stream info: " << url << "\n";
-            release_stream(s);
-            return false;
-        }
-        s.interrupt_ctx.deadline = std::chrono::steady_clock::time_point{};
+    if (!config.hwaccel.empty()) {
+      av_dict_set(&opts, "hwaccel", config.hwaccel.c_str(), 0);
+    }
 
-        s.video_stream_index = -1;
-        s.audio_stream_index = -1;
+    if (config.thread_count > 0) {
+      av_dict_set(&opts, "threads", std::to_string(config.thread_count).c_str(),
+                  0);
+    }
 
-        for (unsigned j = 0; j < s.fmt_ctx->nb_streams; ++j)
-        {
-            AVStream *st = s.fmt_ctx->streams[j];
-            if (st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO && s.video_stream_index == -1)
-            {
-                s.video_stream_index = j;
-            }
-            else if (st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO && s.audio_stream_index == -1)
-            {
-                s.audio_stream_index = j;
-                AUDIO_LOG("Found audio stream at index " << j);
-                AUDIO_LOG("Codec: " << avcodec_get_name(st->codecpar->codec_id));
-                AUDIO_LOG("Sample rate: " << st->codecpar->sample_rate << " Hz");
+    s.interrupt_ctx.deadline =
+        std::chrono::steady_clock::now() + kStreamReadTimeout;
+    if (avformat_open_input(&s.fmt_ctx, url.c_str(), nullptr, &opts) < 0) {
+      std::cerr << "Could not open input: " << url << "\n";
+      av_dict_free(&opts);
+      release_stream(s);
+      return false;
+    }
+    av_dict_free(&opts);
+
+    s.interrupt_ctx.deadline =
+        std::chrono::steady_clock::now() + kStreamReadTimeout;
+    if (avformat_find_stream_info(s.fmt_ctx, nullptr) < 0) {
+      std::cerr << "Could not find stream info: " << url << "\n";
+      release_stream(s);
+      return false;
+    }
+    s.interrupt_ctx.deadline = std::chrono::steady_clock::time_point{};
+
+    s.video_stream_index = -1;
+    s.audio_stream_index = -1;
+
+    for (unsigned j = 0; j < s.fmt_ctx->nb_streams; ++j) {
+      AVStream *st = s.fmt_ctx->streams[j];
+      if (st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO &&
+          s.video_stream_index == -1) {
+        s.video_stream_index = j;
+      } else if (st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO &&
+                 s.audio_stream_index == -1) {
+        s.audio_stream_index = j;
+        AUDIO_LOG("Found audio stream at index " << j);
+        AUDIO_LOG("Codec: " << avcodec_get_name(st->codecpar->codec_id));
+        AUDIO_LOG("Sample rate: " << st->codecpar->sample_rate << " Hz");
 #if LIBAVCODEC_VERSION_MAJOR >= 59
-                AUDIO_LOG("Channels: " << st->codecpar->ch_layout.nb_channels);
+        AUDIO_LOG("Channels: " << st->codecpar->ch_layout.nb_channels);
 #else
-                AUDIO_LOG("Channels: " << st->codecpar->channels);
+        AUDIO_LOG("Channels: " << st->codecpar->channels);
 #endif
-                AUDIO_LOG("Format: " << av_get_sample_fmt_name((AVSampleFormat)st->codecpar->format));
-            }
+        AUDIO_LOG("Format: " << av_get_sample_fmt_name(
+                      (AVSampleFormat)st->codecpar->format));
+      }
+    }
+    if (s.video_stream_index == -1) {
+      std::cerr << "No video stream in: " << url << "\n";
+      release_stream(s);
+      return false;
+    }
+
+    if (s.audio_stream_index == -1) {
+      AUDIO_LOG("WARNING: No audio stream found in stream!");
+    }
+
+    const AVCodec *vcodec = avcodec_find_decoder(
+        s.fmt_ctx->streams[s.video_stream_index]->codecpar->codec_id);
+    if (!vcodec) {
+      std::cerr << "Could not find video decoder for: " << url << "\n";
+      release_stream(s);
+      return false;
+    }
+
+    s.vctx = avcodec_alloc_context3(vcodec);
+    if (!s.vctx) {
+      std::cerr << "Failed to allocate video codec context for: " << url
+                << "\n";
+      release_stream(s);
+      return false;
+    }
+
+    if (avcodec_parameters_to_context(
+            s.vctx, s.fmt_ctx->streams[s.video_stream_index]->codecpar) < 0) {
+      std::cerr << "Failed to copy video codec parameters for: " << url << "\n";
+      release_stream(s);
+      return false;
+    }
+
+    if (avcodec_open2(s.vctx, vcodec, nullptr) < 0) {
+      std::cerr << "Could not open video codec for: " << url << "\n";
+      release_stream(s);
+      return false;
+    }
+
+    s.vframe = av_frame_alloc();
+    if (!s.vframe) {
+      std::cerr << "Failed to allocate video frame for: " << url << "\n";
+      release_stream(s);
+      return false;
+    }
+
+    s.pkt = av_packet_alloc();
+    s.aframe = av_frame_alloc();
+    if (!s.pkt || !s.aframe) {
+      std::cerr << "Failed to allocate packet/frame for: " << url << "\n";
+      release_stream(s);
+      return false;
+    }
+
+    if (!configure_scaler(s, s.vctx->width, s.vctx->height, s.vctx->pix_fmt,
+                          url)) {
+      release_stream(s);
+      return false;
+    }
+
+    if (set_reference &&
+        (!reference_dimensions_ready || single_w <= 0 || single_h <= 0)) {
+      single_w = s.frame_width;
+      single_h = s.frame_height;
+      reference_dimensions_ready = true;
+    }
+
+    return true;
+  };
+
+  auto start_stream_worker = [&](int idx) {
+    if (idx < 0 || idx >= stream_count) {
+      return;
+    }
+
+    VideoStreamCtx &stream = streams[idx];
+    if (!stream.fmt_ctx || !stream.vctx || !stream.pkt || !stream.vframe) {
+      return;
+    }
+
+    stop_stream_worker(stream);
+    stream.worker_stop.store(false);
+    stream.worker_failed.store(false);
+    stream.pending_reference_update.store(false);
+    stream.last_consumed_generation = -1;
+    stream.frame_generation = 0;
+    stream.frame_available = false;
+
+    stream.worker = std::thread([&, idx]() {
+      VideoStreamCtx &worker_stream = streams[idx];
+      const std::string stream_label =
+          (idx < static_cast<int>(stream_names.size()) &&
+           !stream_names[idx].empty())
+              ? stream_names[idx]
+              : ("Stream " + std::to_string(idx));
+
+      // Frame rate limiting setup
+      bool limit_frame_rate = true; // Default enabled
+      if (idx < static_cast<int>(stream_configs.size())) {
+        limit_frame_rate = stream_configs[idx].limit_frame_rate;
+      }
+
+      // Calculate target frame interval from stream's actual fps
+      double fps = 25.0; // Default fallback
+      if (worker_stream.fmt_ctx && worker_stream.video_stream_index >= 0) {
+        AVStream *av_stream =
+            worker_stream.fmt_ctx->streams[worker_stream.video_stream_index];
+        if (av_stream->avg_frame_rate.den != 0) {
+          fps = av_q2d(av_stream->avg_frame_rate);
+        } else if (av_stream->r_frame_rate.den != 0) {
+          fps = av_q2d(av_stream->r_frame_rate);
         }
-        if (s.video_stream_index == -1)
-        {
-            std::cerr << "No video stream in: " << url << "\n";
-            release_stream(s);
-            return false;
+      }
+
+      const auto target_frame_interval =
+          std::chrono::microseconds(static_cast<int64_t>(1000000.0 / fps));
+      auto last_frame_display_time = std::chrono::steady_clock::now();
+
+      PERF_LOG("[Stream " << idx << "] Frame rate limiting: "
+                          << (limit_frame_rate ? "ENABLED" : "DISABLED")
+                          << " | Target FPS: " << fps
+                          << " (interval: " << (1000000.0 / fps) << "us)");
+
+      while (!worker_stream.worker_stop.load()) {
+        auto read_start = std::chrono::steady_clock::now();
+
+        worker_stream.interrupt_ctx.abort = false;
+        worker_stream.interrupt_ctx.deadline =
+            std::chrono::steady_clock::now() + kStreamReadTimeout;
+        int read_result =
+            av_read_frame(worker_stream.fmt_ctx, worker_stream.pkt);
+        worker_stream.interrupt_ctx.deadline =
+            std::chrono::steady_clock::time_point{};
+
+        auto read_end = std::chrono::steady_clock::now();
+        auto read_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                           read_end - read_start)
+                           .count();
+
+        if (read_ms > 10) {
+          PERF_LOG("[Stream " << idx << "] Packet read: " << read_ms
+                              << "ms (SLOW!)");
         }
 
-        if (s.audio_stream_index == -1)
-        {
-            AUDIO_LOG("WARNING: No audio stream found in stream!");
+        if (worker_stream.worker_stop.load()) {
+          break;
         }
 
-        const AVCodec *vcodec = avcodec_find_decoder(
-            s.fmt_ctx->streams[s.video_stream_index]->codecpar->codec_id);
-        if (!vcodec)
-        {
-            std::cerr << "Could not find video decoder for: " << url << "\n";
-            release_stream(s);
-            return false;
-        }
-
-        s.vctx = avcodec_alloc_context3(vcodec);
-        if (!s.vctx)
-        {
-            std::cerr << "Failed to allocate video codec context for: " << url << "\n";
-            release_stream(s);
-            return false;
-        }
-
-        if (avcodec_parameters_to_context(
-                s.vctx, s.fmt_ctx->streams[s.video_stream_index]->codecpar) < 0)
-        {
-            std::cerr << "Failed to copy video codec parameters for: " << url << "\n";
-            release_stream(s);
-            return false;
-        }
-
-        if (avcodec_open2(s.vctx, vcodec, nullptr) < 0)
-        {
-            std::cerr << "Could not open video codec for: " << url << "\n";
-            release_stream(s);
-            return false;
-        }
-
-        s.vframe = av_frame_alloc();
-        if (!s.vframe)
-        {
-            std::cerr << "Failed to allocate video frame for: " << url << "\n";
-            release_stream(s);
-            return false;
-        }
-
-        s.pkt = av_packet_alloc();
-        s.aframe = av_frame_alloc();
-        if (!s.pkt || !s.aframe)
-        {
-            std::cerr << "Failed to allocate packet/frame for: " << url << "\n";
-            release_stream(s);
-            return false;
-        }
-
-        if (!configure_scaler(s, s.vctx->width, s.vctx->height, s.vctx->pix_fmt, url))
-        {
-            release_stream(s);
-            return false;
-        }
-
-        if (set_reference && (!reference_dimensions_ready || single_w <= 0 || single_h <= 0))
-        {
-            single_w = s.frame_width;
-            single_h = s.frame_height;
-            reference_dimensions_ready = true;
-        }
-
-        return true;
-    };
-
-    auto start_stream_worker = [&](int idx)
-    {
-        if (idx < 0 || idx >= stream_count)
-        {
-            return;
-        }
-
-        VideoStreamCtx &stream = streams[idx];
-        if (!stream.fmt_ctx || !stream.vctx || !stream.pkt || !stream.vframe)
-        {
-            return;
-        }
-
-        stop_stream_worker(stream);
-        stream.worker_stop.store(false);
-        stream.worker_failed.store(false);
-        stream.pending_reference_update.store(false);
-        stream.last_consumed_generation = -1;
-        stream.frame_generation = 0;
-        stream.frame_available = false;
-
-        stream.worker = std::thread([&, idx]()
-                                    {
-            VideoStreamCtx &worker_stream = streams[idx];
-            const std::string stream_label = (idx < static_cast<int>(stream_names.size()) && !stream_names[idx].empty())
-                                                 ? stream_names[idx]
-                                                 : ("Stream " + std::to_string(idx));
-
-            // Frame rate limiting setup
-            bool limit_frame_rate = true; // Default enabled
-            if (idx < static_cast<int>(stream_configs.size())) {
-                limit_frame_rate = stream_configs[idx].limit_frame_rate;
-            }
-            
-            // Calculate target frame interval from stream's actual fps
-            double fps = 25.0; // Default fallback
-            if (worker_stream.fmt_ctx && worker_stream.video_stream_index >= 0) {
-                AVStream* av_stream = worker_stream.fmt_ctx->streams[worker_stream.video_stream_index];
-                if (av_stream->avg_frame_rate.den != 0) {
-                    fps = av_q2d(av_stream->avg_frame_rate);
-                } else if (av_stream->r_frame_rate.den != 0) {
-                    fps = av_q2d(av_stream->r_frame_rate);
-                }
-            }
-            
-            const auto target_frame_interval = std::chrono::microseconds(static_cast<int64_t>(1000000.0 / fps));
-            auto last_frame_display_time = std::chrono::steady_clock::now();
-            
-            PERF_LOG("[Stream " << idx << "] Frame rate limiting: " << (limit_frame_rate ? "ENABLED" : "DISABLED") 
-                     << " | Target FPS: " << fps << " (interval: " << (1000000.0 / fps) << "us)");
-
-            while (!worker_stream.worker_stop.load())
-            {
-                auto read_start = std::chrono::steady_clock::now();
-                
-                worker_stream.interrupt_ctx.abort = false;
-                worker_stream.interrupt_ctx.deadline = std::chrono::steady_clock::now() + kStreamReadTimeout;
-                int read_result = av_read_frame(worker_stream.fmt_ctx, worker_stream.pkt);
-                worker_stream.interrupt_ctx.deadline = std::chrono::steady_clock::time_point{};
-
-                auto read_end = std::chrono::steady_clock::now();
-                auto read_ms = std::chrono::duration_cast<std::chrono::milliseconds>(read_end - read_start).count();
-                
-                if (read_ms > 10) {
-                    PERF_LOG("[Stream " << idx << "] Packet read: " << read_ms << "ms (SLOW!)");
-                }
-
-                if (worker_stream.worker_stop.load())
-                {
-                    break;
-                }
-
-                if (read_result < 0)
-                {
-                    if (worker_stream.worker_stop.load() && read_result == AVERROR_EXIT)
-                    {
-                        break;
-                    }
-                    if (read_result == AVERROR(EAGAIN))
-                    {
-                        continue;
-                    }
-                    char errbuf[AV_ERROR_MAX_STRING_SIZE] = {};
-                    av_strerror(read_result, errbuf, sizeof(errbuf));
+        if (read_result < 0) {
+          if (worker_stream.worker_stop.load() && read_result == AVERROR_EXIT) {
+            break;
+          }
+          if (read_result == AVERROR(EAGAIN)) {
+            continue;
+          }
+          char errbuf[AV_ERROR_MAX_STRING_SIZE] = {};
+          av_strerror(read_result, errbuf, sizeof(errbuf));
 #ifdef DEBUG_LOGGING
-                    std::cerr << "[diag] worker read failure for \"" << stream_label << "\" (" << errbuf << ", code " << read_result << ")\n";
+          std::cerr << "[diag] worker read failure for \"" << stream_label
+                    << "\" (" << errbuf << ", code " << read_result << ")\n";
 #endif
-                    worker_stream.worker_failed.store(true);
-                    break;
-                }
+          worker_stream.worker_failed.store(true);
+          break;
+        }
 
-                if (worker_stream.pkt->stream_index == worker_stream.video_stream_index)
-                {
-                    auto decode_start = std::chrono::steady_clock::now();
-                    avcodec_send_packet(worker_stream.vctx, worker_stream.pkt);
-                    while (!worker_stream.worker_stop.load() && avcodec_receive_frame(worker_stream.vctx, worker_stream.vframe) == 0)
-                    {
-                        auto decode_end = std::chrono::steady_clock::now();
-                        auto decode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(decode_end - decode_start).count();
-                        
-                        PERF_LOG("[Stream " << idx << "] Decode: " << decode_ms << "ms" << (decode_ms > 16 ? " (SLOW!)" : ""));
-                        
-                        int decoded_w = worker_stream.vframe->width > 0 ? worker_stream.vframe->width : worker_stream.vctx->width;
-                        int decoded_h = worker_stream.vframe->height > 0 ? worker_stream.vframe->height : worker_stream.vctx->height;
-                        AVPixelFormat decoded_fmt = worker_stream.vframe->format >= 0
-                                                         ? static_cast<AVPixelFormat>(worker_stream.vframe->format)
-                                                         : worker_stream.vctx->pix_fmt;
-                        if (decoded_fmt == AV_PIX_FMT_NONE)
-                        {
-                            decoded_fmt = worker_stream.vctx->pix_fmt;
-                        }
+        if (worker_stream.pkt->stream_index ==
+            worker_stream.video_stream_index) {
+          auto decode_start = std::chrono::steady_clock::now();
+          avcodec_send_packet(worker_stream.vctx, worker_stream.pkt);
+          while (!worker_stream.worker_stop.load() &&
+                 avcodec_receive_frame(worker_stream.vctx,
+                                       worker_stream.vframe) == 0) {
+            auto decode_end = std::chrono::steady_clock::now();
+            auto decode_ms =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    decode_end - decode_start)
+                    .count();
 
-                        bool worker_failed = false;
-                        {
-                            std::lock_guard<std::mutex> lock(worker_stream.frame_mutex);
-                            bool geometry_changed = decoded_w != worker_stream.frame_width ||
-                                                     decoded_h != worker_stream.frame_height ||
-                                                     decoded_fmt != worker_stream.frame_pix_fmt;
-                            bool context_missing = !worker_stream.sws || !worker_stream.vframe_rgb || worker_stream.rgb_linesize <= 0;
-                            if (geometry_changed || context_missing)
-                            {
-                                if (!configure_scaler(worker_stream, decoded_w, decoded_h, decoded_fmt, stream_label))
-                                {
-                                    worker_failed = true;
-                                }
-                                else
-                                {
-                                    worker_stream.pending_reference_update.store(true);
-                                }
-                            }
+            PERF_LOG("[Stream " << idx << "] Decode: " << decode_ms << "ms"
+                                << (decode_ms > 16 ? " (SLOW!)" : ""));
 
-                            if (!worker_failed && worker_stream.sws && worker_stream.vframe_rgb)
-                            {
-                                auto convert_start = std::chrono::steady_clock::now();
-                                sws_scale(worker_stream.sws,
-                                          worker_stream.vframe->data, worker_stream.vframe->linesize,
-                                          0, worker_stream.frame_height,
-                                          worker_stream.vframe_rgb->data, worker_stream.vframe_rgb->linesize);
-                                auto convert_end = std::chrono::steady_clock::now();
-                                auto convert_ms = std::chrono::duration_cast<std::chrono::milliseconds>(convert_end - convert_start).count();
-                                
-                                PERF_LOG("[Stream " << idx << "] YUV->RGB: " << convert_ms << "ms (res: " << decoded_w << "x" << decoded_h << ")" << (convert_ms > 10 ? " (SLOW!)" : ""));
-                                
-                                // Frame rate limiting - wait if we're displaying frames too fast
-                                if (limit_frame_rate) {
-                                    auto now = std::chrono::steady_clock::now();
-                                    auto elapsed_since_last_frame = now - last_frame_display_time;
-                                    if (elapsed_since_last_frame < target_frame_interval) {
-                                        auto sleep_duration = target_frame_interval - elapsed_since_last_frame;
-                                        std::this_thread::sleep_for(sleep_duration);
-                                        
-                                        auto sleep_ms = std::chrono::duration_cast<std::chrono::milliseconds>(sleep_duration).count();
-                                        if (sleep_ms > 5) {
-                                            PERF_LOG("[Stream " << idx << "] Frame pacing sleep: " << sleep_ms << "ms");
-                                        }
-                                    }
-                                    last_frame_display_time = std::chrono::steady_clock::now();
-                                }
-                                
-                                worker_stream.frame_generation++;
-                                worker_stream.frame_available = true;
-                            }
-                            else if (worker_failed)
-                            {
-                                worker_stream.frame_available = false;
-                            }
-                        }
-
-                        if (worker_failed)
-                        {
-                            worker_stream.worker_failed.store(true);
-                            av_frame_unref(worker_stream.vframe);
-                            break;
-                        }
-
-                        av_frame_unref(worker_stream.vframe);
-                        if (worker_stream.worker_failed.load())
-                        {
-                            break;
-                        }
-                    }
-                }
-                else if (idx == active_audio_stream.load() && worker_stream.pkt->stream_index == worker_stream.audio_stream_index && worker_stream.actx)
-                {
-                    avcodec_send_packet(worker_stream.actx, worker_stream.pkt);
-                    while (!worker_stream.worker_stop.load() && avcodec_receive_frame(worker_stream.actx, worker_stream.aframe) == 0)
-                    {
-                        if (!swr)
-                        {
-                            av_frame_unref(worker_stream.aframe);
-                            continue;
-                        }
-
-                        uint8_t *out_buf[2] = {nullptr};
-                        int out_samples = av_rescale_rnd(
-                            swr_get_out_samples(swr, worker_stream.aframe->nb_samples),
-                            44100, worker_stream.actx->sample_rate, AV_ROUND_UP);
-
-                        if (av_samples_alloc(out_buf, nullptr, 2, out_samples, AV_SAMPLE_FMT_S16, 0) < 0)
-                        {
-                            av_frame_unref(worker_stream.aframe);
-                            break;
-                        }
-
-                        int converted = swr_convert(
-                            swr, out_buf, out_samples,
-                            (const uint8_t **)worker_stream.aframe->data, worker_stream.aframe->nb_samples);
-
-                        int out_size = av_samples_get_buffer_size(nullptr, 2, converted, AV_SAMPLE_FMT_S16, 1);
-                        if (out_size > 0 && out_buf[0])
-                        {
-                            std::lock_guard<std::mutex> lock(audio_data.mutex);
-                            audio_data.buffer.insert(audio_data.buffer.end(), out_buf[0], out_buf[0] + out_size);
-                        }
-                        av_freep(&out_buf[0]);
-                        av_frame_unref(worker_stream.aframe);
-                    }
-                }
-
-                if (worker_stream.pkt)
-                {
-                    av_packet_unref(worker_stream.pkt);
-                }
+            int decoded_w = worker_stream.vframe->width > 0
+                                ? worker_stream.vframe->width
+                                : worker_stream.vctx->width;
+            int decoded_h = worker_stream.vframe->height > 0
+                                ? worker_stream.vframe->height
+                                : worker_stream.vctx->height;
+            AVPixelFormat decoded_fmt =
+                worker_stream.vframe->format >= 0
+                    ? static_cast<AVPixelFormat>(worker_stream.vframe->format)
+                    : worker_stream.vctx->pix_fmt;
+            if (decoded_fmt == AV_PIX_FMT_NONE) {
+              decoded_fmt = worker_stream.vctx->pix_fmt;
             }
 
-            if (worker_stream.pkt)
+            bool worker_failed = false;
             {
-                av_packet_unref(worker_stream.pkt);
-            } });
-    };
+              std::lock_guard<std::mutex> lock(worker_stream.frame_mutex);
+              bool geometry_changed =
+                  decoded_w != worker_stream.frame_width ||
+                  decoded_h != worker_stream.frame_height ||
+                  decoded_fmt != worker_stream.frame_pix_fmt;
+              bool context_missing = !worker_stream.sws ||
+                                     !worker_stream.vframe_rgb ||
+                                     worker_stream.rgb_linesize <= 0;
+              if (geometry_changed || context_missing) {
+                if (!configure_scaler(worker_stream, decoded_w, decoded_h,
+                                      decoded_fmt, stream_label)) {
+                  worker_failed = true;
+                } else {
+                  worker_stream.pending_reference_update.store(true);
+                }
+              }
 
-    auto async_open_stream = [&](int idx, const std::string &url, bool set_reference)
+              if (!worker_failed && worker_stream.sws &&
+                  worker_stream.vframe_rgb) {
+                auto convert_start = std::chrono::steady_clock::now();
+                sws_scale(worker_stream.sws, worker_stream.vframe->data,
+                          worker_stream.vframe->linesize, 0,
+                          worker_stream.frame_height,
+                          worker_stream.vframe_rgb->data,
+                          worker_stream.vframe_rgb->linesize);
+                auto convert_end = std::chrono::steady_clock::now();
+                auto convert_ms =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        convert_end - convert_start)
+                        .count();
+
+                PERF_LOG("[Stream " << idx << "] YUV->RGB: " << convert_ms
+                                    << "ms (res: " << decoded_w << "x"
+                                    << decoded_h << ")"
+                                    << (convert_ms > 10 ? " (SLOW!)" : ""));
+
+                // Frame rate limiting - wait if we're displaying frames too
+                // fast
+                if (limit_frame_rate) {
+                  auto now = std::chrono::steady_clock::now();
+                  auto elapsed_since_last_frame = now - last_frame_display_time;
+                  if (elapsed_since_last_frame < target_frame_interval) {
+                    auto sleep_duration =
+                        target_frame_interval - elapsed_since_last_frame;
+                    std::this_thread::sleep_for(sleep_duration);
+
+                    auto sleep_ms =
+                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                            sleep_duration)
+                            .count();
+                    if (sleep_ms > 5) {
+                      PERF_LOG("[Stream " << idx << "] Frame pacing sleep: "
+                                          << sleep_ms << "ms");
+                    }
+                  }
+                  last_frame_display_time = std::chrono::steady_clock::now();
+                }
+
+                worker_stream.frame_generation++;
+                worker_stream.frame_available = true;
+              } else if (worker_failed) {
+                worker_stream.frame_available = false;
+              }
+            }
+
+            if (worker_failed) {
+              worker_stream.worker_failed.store(true);
+              av_frame_unref(worker_stream.vframe);
+              break;
+            }
+
+            av_frame_unref(worker_stream.vframe);
+            if (worker_stream.worker_failed.load()) {
+              break;
+            }
+          }
+        } else if (idx == active_audio_stream.load() &&
+                   worker_stream.pkt->stream_index ==
+                       worker_stream.audio_stream_index &&
+                   worker_stream.actx) {
+          avcodec_send_packet(worker_stream.actx, worker_stream.pkt);
+          while (!worker_stream.worker_stop.load() &&
+                 avcodec_receive_frame(worker_stream.actx,
+                                       worker_stream.aframe) == 0) {
+            if (!swr) {
+              av_frame_unref(worker_stream.aframe);
+              continue;
+            }
+
+            uint8_t *out_buf[2] = {nullptr};
+            int out_samples = av_rescale_rnd(
+                swr_get_out_samples(swr, worker_stream.aframe->nb_samples),
+                44100, worker_stream.actx->sample_rate, AV_ROUND_UP);
+
+            if (av_samples_alloc(out_buf, nullptr, 2, out_samples,
+                                 AV_SAMPLE_FMT_S16, 0) < 0) {
+              av_frame_unref(worker_stream.aframe);
+              break;
+            }
+
+            int converted =
+                swr_convert(swr, out_buf, out_samples,
+                            (const uint8_t **)worker_stream.aframe->data,
+                            worker_stream.aframe->nb_samples);
+
+            int out_size = av_samples_get_buffer_size(nullptr, 2, converted,
+                                                      AV_SAMPLE_FMT_S16, 1);
+            if (out_size > 0 && out_buf[0]) {
+              std::lock_guard<std::mutex> lock(audio_data.mutex);
+              audio_data.buffer.insert(audio_data.buffer.end(), out_buf[0],
+                                       out_buf[0] + out_size);
+            }
+            av_freep(&out_buf[0]);
+            av_frame_unref(worker_stream.aframe);
+          }
+        }
+
+        if (worker_stream.pkt) {
+          av_packet_unref(worker_stream.pkt);
+        }
+      }
+
+      if (worker_stream.pkt) {
+        av_packet_unref(worker_stream.pkt);
+      }
+    });
+  };
+
+  auto async_open_stream = [&](int idx, const std::string &url,
+                               bool set_reference) {
+    if (idx < 0 || idx >= stream_count) {
+      return;
+    }
+
+    VideoStreamCtx &s = streams[idx];
+
+    // Don't start another async open if one is already in progress
+    if (s.async_open_in_progress.load()) {
+      return;
+    }
+
+    s.async_open_in_progress.store(true);
+
+    // Create a detached thread so we don't need to manage joining
+    std::thread([&, idx, url, set_reference]() {
+      bool success = open_stream(idx, url, set_reference);
+
+      if (success) {
+        record_stream_open(idx);
+
+        // Handle canvas dimensions if needed
+        if (ensure_canvas_dimensions && streams[idx].vctx) {
+          if (!ensure_canvas_dimensions(streams[idx].vctx->width,
+                                        streams[idx].vctx->height,
+                                        placeholder_dimensions)) {
+            std::cerr << "Failed to resize canvas during async open." << "\n";
+          }
+        }
+
+        // Start the worker thread for this stream
+        start_stream_worker(idx);
+      } else {
+        // Schedule retry if opening failed
+        schedule_stream_retry(idx, kStreamRetryInitialDelay);
+      }
+
+      streams[idx].async_open_in_progress.store(false);
+    }).detach();
+  };
+
+  auto configure_audio = [&](VideoStreamCtx &audio_stream) -> bool {
+    AUDIO_LOG("configure_audio() called");
+
+    // Find which stream index this is
+    int stream_idx = -1;
+    for (int i = 0; i < stream_count; ++i) {
+      if (&streams[i] == &audio_stream) {
+        stream_idx = i;
+        break;
+      }
+    }
+    AUDIO_LOG("Configuring audio for stream index: " << stream_idx);
+    AUDIO_LOG("audio_stream.audio_stream_index = "
+              << audio_stream.audio_stream_index);
+
+    if (audio_device_open) {
+      AUDIO_LOG("Audio device already open, pausing...");
+      SDL_PauseAudio(1);
+    }
+
     {
-        if (idx < 0 || idx >= stream_count)
-        {
-            return;
-        }
+      std::lock_guard<std::mutex> lock(audio_data.mutex);
+      audio_data.buffer.clear();
+    }
 
-        VideoStreamCtx &s = streams[idx];
+    if (swr) {
+      swr_free(&swr);
+      swr = nullptr;
+    }
 
-        // Don't start another async open if one is already in progress
-        if (s.async_open_in_progress.load())
-        {
-            return;
-        }
+    if (audio_stream.audio_stream_index == -1) {
+      AUDIO_LOG("No audio stream index, skipping audio setup");
+      return true;
+    }
 
-        s.async_open_in_progress.store(true);
+    AUDIO_LOG("Setting up audio decoder...");
 
-        // Create a detached thread so we don't need to manage joining
-        std::thread([&, idx, url, set_reference]()
-                    {
-            bool success = open_stream(idx, url, set_reference);
-            
-            if (success)
-            {
-                record_stream_open(idx);
-                
-                // Handle canvas dimensions if needed
-                if (ensure_canvas_dimensions && streams[idx].vctx)
-                {
-                    if (!ensure_canvas_dimensions(streams[idx].vctx->width,
-                                                  streams[idx].vctx->height,
-                                                  placeholder_dimensions))
-                    {
-                        std::cerr << "Failed to resize canvas during async open." << "\n";
-                    }
-                }
-                
-                // Start the worker thread for this stream
-                start_stream_worker(idx);
-            }
-            else
-            {
-                // Schedule retry if opening failed
-                schedule_stream_retry(idx, kStreamRetryInitialDelay);
-            }
-            
-            streams[idx].async_open_in_progress.store(false); })
-            .detach();
-    };
+    const AVCodec *acodec = avcodec_find_decoder(
+        audio_stream.fmt_ctx->streams[audio_stream.audio_stream_index]
+            ->codecpar->codec_id);
+    if (!acodec) {
+      std::cerr << "Failed to find audio decoder\n";
+      return false;
+    }
 
-    auto configure_audio = [&](VideoStreamCtx &audio_stream) -> bool
-    {
-        AUDIO_LOG("configure_audio() called");
+    audio_stream.actx = avcodec_alloc_context3(acodec);
+    if (!audio_stream.actx) {
+      std::cerr << "Failed to allocate audio codec context\n";
+      return false;
+    }
 
-        // Find which stream index this is
-        int stream_idx = -1;
-        for (int i = 0; i < stream_count; ++i)
-        {
-            if (&streams[i] == &audio_stream)
-            {
-                stream_idx = i;
-                break;
-            }
-        }
-        AUDIO_LOG("Configuring audio for stream index: " << stream_idx);
-        AUDIO_LOG("audio_stream.audio_stream_index = " << audio_stream.audio_stream_index);
+    if (avcodec_parameters_to_context(
+            audio_stream.actx,
+            audio_stream.fmt_ctx->streams[audio_stream.audio_stream_index]
+                ->codecpar) < 0) {
+      std::cerr << "Failed to copy audio codec parameters\n";
+      avcodec_free_context(&audio_stream.actx);
+      return false;
+    }
 
-        if (audio_device_open)
-        {
-            AUDIO_LOG("Audio device already open, pausing...");
-            SDL_PauseAudio(1);
-        }
+    if (avcodec_open2(audio_stream.actx, acodec, nullptr) < 0) {
+      std::cerr << "Failed to open audio codec\n";
+      avcodec_free_context(&audio_stream.actx);
+      return false;
+    }
 
-        {
-            std::lock_guard<std::mutex> lock(audio_data.mutex);
-            audio_data.buffer.clear();
-        }
-
-        if (swr)
-        {
-            swr_free(&swr);
-            swr = nullptr;
-        }
-
-        if (audio_stream.audio_stream_index == -1)
-        {
-            AUDIO_LOG("No audio stream index, skipping audio setup");
-            return true;
-        }
-
-        AUDIO_LOG("Setting up audio decoder...");
-
-        const AVCodec *acodec =
-            avcodec_find_decoder(audio_stream.fmt_ctx
-                                     ->streams[audio_stream.audio_stream_index]
-                                     ->codecpar->codec_id);
-        if (!acodec)
-        {
-            std::cerr << "Failed to find audio decoder\n";
-            return false;
-        }
-
-        audio_stream.actx = avcodec_alloc_context3(acodec);
-        if (!audio_stream.actx)
-        {
-            std::cerr << "Failed to allocate audio codec context\n";
-            return false;
-        }
-
-        if (avcodec_parameters_to_context(
-                audio_stream.actx,
-                audio_stream.fmt_ctx->streams[audio_stream.audio_stream_index]->codecpar) < 0)
-        {
-            std::cerr << "Failed to copy audio codec parameters\n";
-            avcodec_free_context(&audio_stream.actx);
-            return false;
-        }
-
-        if (avcodec_open2(audio_stream.actx, acodec, nullptr) < 0)
-        {
-            std::cerr << "Failed to open audio codec\n";
-            avcodec_free_context(&audio_stream.actx);
-            return false;
-        }
-
-        bool need_init = true;
+    bool need_init = true;
 #if LIBAVCODEC_VERSION_MAJOR >= 59
-        AVChannelLayout out_layout;
-        av_channel_layout_default(&out_layout, 2);
-        AVChannelLayout in_layout = audio_stream.actx->ch_layout;
-        if (in_layout.nb_channels == 0)
-        {
-            av_channel_layout_default(&in_layout, 2);
-        }
-        if (swr_alloc_set_opts2(&swr,
-                                &out_layout, AV_SAMPLE_FMT_S16, 44100,
-                                &in_layout, audio_stream.actx->sample_fmt, audio_stream.actx->sample_rate,
-                                0, nullptr) < 0)
-        {
-            std::cerr << "Failed to configure audio resampler\n";
-            avcodec_free_context(&audio_stream.actx);
-            return false;
-        }
+    AVChannelLayout out_layout;
+    av_channel_layout_default(&out_layout, 2);
+    AVChannelLayout in_layout = audio_stream.actx->ch_layout;
+    if (in_layout.nb_channels == 0) {
+      av_channel_layout_default(&in_layout, 2);
+    }
+    if (swr_alloc_set_opts2(&swr, &out_layout, AV_SAMPLE_FMT_S16, 44100,
+                            &in_layout, audio_stream.actx->sample_fmt,
+                            audio_stream.actx->sample_rate, 0, nullptr) < 0) {
+      std::cerr << "Failed to configure audio resampler\n";
+      avcodec_free_context(&audio_stream.actx);
+      return false;
+    }
 #else
-        swr = swr_alloc();
-        if (!swr)
-        {
-            std::cerr << "Failed to configure audio resampler\n";
-            avcodec_free_context(&audio_stream.actx);
-            return false;
-        }
-        uint64_t in_layout = audio_stream.actx->channel_layout ? audio_stream.actx->channel_layout
-                                                               : av_get_default_channel_layout(audio_stream.actx->channels);
-        av_opt_set_int(swr, "in_channel_layout", in_layout, 0);
-        av_opt_set_int(swr, "out_channel_layout", AV_CH_LAYOUT_STEREO, 0);
-        av_opt_set_int(swr, "in_sample_rate", audio_stream.actx->sample_rate, 0);
-        av_opt_set_int(swr, "out_sample_rate", 44100, 0);
-        av_opt_set_sample_fmt(swr, "in_sample_fmt", audio_stream.actx->sample_fmt, 0);
-        av_opt_set_sample_fmt(swr, "out_sample_fmt", AV_SAMPLE_FMT_S16, 0);
-        if (swr_init(swr) < 0)
-        {
-            std::cerr << "Failed to initialise audio resampler\n";
-            avcodec_free_context(&audio_stream.actx);
-            swr_free(&swr);
-            return false;
-        }
-        need_init = false;
+    swr = swr_alloc();
+    if (!swr) {
+      std::cerr << "Failed to configure audio resampler\n";
+      avcodec_free_context(&audio_stream.actx);
+      return false;
+    }
+    uint64_t in_layout =
+        audio_stream.actx->channel_layout
+            ? audio_stream.actx->channel_layout
+            : av_get_default_channel_layout(audio_stream.actx->channels);
+    av_opt_set_int(swr, "in_channel_layout", in_layout, 0);
+    av_opt_set_int(swr, "out_channel_layout", AV_CH_LAYOUT_STEREO, 0);
+    av_opt_set_int(swr, "in_sample_rate", audio_stream.actx->sample_rate, 0);
+    av_opt_set_int(swr, "out_sample_rate", 44100, 0);
+    av_opt_set_sample_fmt(swr, "in_sample_fmt", audio_stream.actx->sample_fmt,
+                          0);
+    av_opt_set_sample_fmt(swr, "out_sample_fmt", AV_SAMPLE_FMT_S16, 0);
+    if (swr_init(swr) < 0) {
+      std::cerr << "Failed to initialise audio resampler\n";
+      avcodec_free_context(&audio_stream.actx);
+      swr_free(&swr);
+      return false;
+    }
+    need_init = false;
 #endif
 
-        if (need_init && swr_init(swr) < 0)
-        {
-            std::cerr << "Failed to initialise audio resampler\n";
-            avcodec_free_context(&audio_stream.actx);
-            swr_free(&swr);
-            return false;
-        }
+    if (need_init && swr_init(swr) < 0) {
+      std::cerr << "Failed to initialise audio resampler\n";
+      avcodec_free_context(&audio_stream.actx);
+      swr_free(&swr);
+      return false;
+    }
 
-        wanted_spec.freq = 44100;
-        wanted_spec.format = AUDIO_S16SYS;
-        wanted_spec.channels = 2;
-        wanted_spec.samples = 1024;
-        wanted_spec.callback = audio_callback;
-        wanted_spec.userdata = &audio_data;
+    wanted_spec.freq = 44100;
+    wanted_spec.format = AUDIO_S16SYS;
+    wanted_spec.channels = 2;
+    wanted_spec.samples = 1024;
+    wanted_spec.callback = audio_callback;
+    wanted_spec.userdata = &audio_data;
 
-        if (!audio_device_open)
-        {
-            if (SDL_OpenAudio(&wanted_spec, nullptr) < 0)
-            {
-                AUDIO_LOG("ERROR: SDL_OpenAudio error: " << SDL_GetError());
-            }
-            else
-            {
-                audio_device_open = true;
-                AUDIO_LOG("Opened audio device successfully");
-                AUDIO_LOG("Requested: " << wanted_spec.freq << "Hz, " << (int)wanted_spec.channels << " channels");
-            }
-        }
+    if (!audio_device_open) {
+      if (SDL_OpenAudio(&wanted_spec, nullptr) < 0) {
+        AUDIO_LOG("ERROR: SDL_OpenAudio error: " << SDL_GetError());
+      } else {
+        audio_device_open = true;
+        AUDIO_LOG("Opened audio device successfully");
+        AUDIO_LOG("Requested: " << wanted_spec.freq << "Hz, "
+                                << (int)wanted_spec.channels << " channels");
+      }
+    }
 
-        if (audio_device_open)
-        {
-            SDL_PauseAudio(0);
-            AUDIO_LOG("Audio playback started/resumed");
-        }
+    if (audio_device_open) {
+      SDL_PauseAudio(0);
+      AUDIO_LOG("Audio playback started/resumed");
+    }
 
-        return true;
+    return true;
+  };
+
+  // Forward declare configuration_panel so lambdas can reference it
+  ConfigurationPanel *configuration_panel_ptr = nullptr;
+
+  auto add_camera_handler =
+      [&](const AddCameraRequest &request) -> AddCameraResult {
+    AddCameraResult result;
+
+    GRID_LOG("ADD CAMERA REQUEST: name='"
+             << request.name << "', url='" << request.rtsp_url
+             << "', via_server=" << request.connect_via_server);
+    GRID_LOG("Before add: stream_count="
+             << stream_count << ", streams.size()=" << streams.size()
+             << ", stream_configs.size()=" << stream_configs.size());
+
+    if (stream_configs.size() >= static_cast<size_t>(TOTAL_SLOTS)) {
+      result.success = false;
+      result.message = "All grid slots are in use.";
+      GRID_LOG("ADD CAMERA FAILED: All slots in use");
+      return result;
+    }
+    if (request.rtsp_url.empty()) {
+      result.success = false;
+      result.message = "RTSP address is required.";
+      GRID_LOG("ADD CAMERA FAILED: Empty RTSP URL");
+      return result;
+    }
+
+    // Probe the stream first to get dimensions (for direct connections only)
+    ProbeResult probe_result;
+    if (!request.connect_via_server) {
+      GRID_LOG("Probing direct stream: " << request.rtsp_url);
+      probe_result = probe_rtsp_stream(request.rtsp_url);
+      if (!probe_result.success) {
+        std::cerr << "Failed to probe stream '" << request.rtsp_url
+                  << "': " << probe_result.error_message << "\n";
+        result.success = false;
+        result.message =
+            "Failed to probe stream: " + probe_result.error_message;
+        GRID_LOG("ADD CAMERA FAILED: Probe failed - "
+                 << probe_result.error_message);
+        return result;
+      }
+      std::cout << "Probe successful for '" << request.rtsp_url
+                << "': " << probe_result.width << "x" << probe_result.height
+                << ", audio=" << (probe_result.has_audio ? "yes" : "no")
+                << "\n";
+      GRID_LOG("Probe successful: " << probe_result.width << "x"
+                                    << probe_result.height
+                                    << ", audio=" << probe_result.has_audio);
+    }
+
+    CameraConfig camera;
+    std::string display_name = request.name;
+    std::string status_message;
+
+    auto trim_in_place = [](std::string &msg) {
+      while (!msg.empty() && (msg.back() == '\n' || msg.back() == '\r')) {
+        msg.pop_back();
+      }
     };
 
-    // Forward declare configuration_panel so lambdas can reference it
-    ConfigurationPanel* configuration_panel_ptr = nullptr;
+    if (request.connect_via_server) {
+      if (display_name.empty()) {
+        result.success = false;
+        result.message = "Camera name is required when using NVR Server.";
+        return result;
+      }
+      if (request.server_endpoint.empty()) {
+        result.success = false;
+        result.message = "Server endpoint is required.";
+        return result;
+      }
 
-    auto add_camera_handler = [&](const AddCameraRequest &request) -> AddCameraResult
-    {
-        AddCameraResult result;
-
-        GRID_LOG("ADD CAMERA REQUEST: name='" << request.name << "', url='" << request.rtsp_url << "', via_server=" << request.connect_via_server);
-        GRID_LOG("Before add: stream_count=" << stream_count << ", streams.size()=" << streams.size() << ", stream_configs.size()=" << stream_configs.size());
-
-        if (stream_configs.size() >= static_cast<size_t>(TOTAL_SLOTS))
-        {
-            result.success = false;
-            result.message = "All grid slots are in use.";
-            GRID_LOG("ADD CAMERA FAILED: All slots in use");
-            return result;
+      // Check if the URL is already a proxied stream (contains the server
+      // endpoint) If so, skip the add_camera request since the proxy is already
+      // set up
+      bool is_already_proxied = false;
+      if (request.live555_proxy) {
+        std::string expected_proxy =
+            build_proxy_rtsp_url(request.server_endpoint, request.name);
+        if (!expected_proxy.empty() && request.rtsp_url == expected_proxy) {
+          is_already_proxied = true;
+          status_message = "Connected to proxied stream.";
+          GRID_LOG("URL is already proxied, skipping add_camera request");
         }
-        if (request.rtsp_url.empty())
-        {
-            result.success = false;
-            result.message = "RTSP address is required.";
-            GRID_LOG("ADD CAMERA FAILED: Empty RTSP URL");
-            return result;
-        }
+      }
 
-        // Probe the stream first to get dimensions (for direct connections only)
-        ProbeResult probe_result;
-        if (!request.connect_via_server)
-        {
-            GRID_LOG("Probing direct stream: " << request.rtsp_url);
-            probe_result = probe_rtsp_stream(request.rtsp_url);
-            if (!probe_result.success)
-            {
-                std::cerr << "Failed to probe stream '" << request.rtsp_url << "': " << probe_result.error_message << "\n";
-                result.success = false;
-                result.message = "Failed to probe stream: " + probe_result.error_message;
-                GRID_LOG("ADD CAMERA FAILED: Probe failed - " << probe_result.error_message);
-                return result;
-            }
-            std::cout << "Probe successful for '" << request.rtsp_url << "': "
-                      << probe_result.width << "x" << probe_result.height
-                      << ", audio=" << (probe_result.has_audio ? "yes" : "no") << "\n";
-            GRID_LOG("Probe successful: " << probe_result.width << "x" << probe_result.height << ", audio=" << probe_result.has_audio);
+      if (!is_already_proxied) {
+        std::string response_body;
+        auto network_result = send_add_camera_request(request, response_body);
+        if (!network_result.success) {
+          status_message = network_result.message;
+          trim_in_place(status_message);
+          if (status_message.empty()) {
+            status_message = "Failed to add camera via NVR Server.";
+          }
+          result.success = false;
+          result.message = status_message;
+          return result;
         }
 
-        CameraConfig camera;
-        std::string display_name = request.name;
-        std::string status_message;
-
-        auto trim_in_place = [](std::string &msg)
-        {
-            while (!msg.empty() && (msg.back() == '\n' || msg.back() == '\r'))
-            {
-                msg.pop_back();
-            }
-        };
-
-        if (request.connect_via_server)
-        {
-            if (display_name.empty())
-            {
-                result.success = false;
-                result.message = "Camera name is required when using NVR Server.";
-                return result;
-            }
-            if (request.server_endpoint.empty())
-            {
-                result.success = false;
-                result.message = "Server endpoint is required.";
-                return result;
-            }
-
-            // Check if the URL is already a proxied stream (contains the server endpoint)
-            // If so, skip the add_camera request since the proxy is already set up
-            bool is_already_proxied = false;
-            if (request.live555_proxy)
-            {
-                std::string expected_proxy = build_proxy_rtsp_url(request.server_endpoint, request.name);
-                if (!expected_proxy.empty() && request.rtsp_url == expected_proxy)
-                {
-                    is_already_proxied = true;
-                    status_message = "Connected to proxied stream.";
-                    GRID_LOG("URL is already proxied, skipping add_camera request");
-                }
-            }
-
-            if (!is_already_proxied)
-            {
-                std::string response_body;
-                auto network_result = send_add_camera_request(request, response_body);
-                if (!network_result.success)
-                {
-                    status_message = network_result.message;
-                    trim_in_place(status_message);
-                    if (status_message.empty())
-                    {
-                        status_message = "Failed to add camera via NVR Server.";
-                    }
-                    result.success = false;
-                    result.message = status_message;
-                    return result;
-                }
-
-                status_message = network_result.message;
-                trim_in_place(status_message);
-                if (status_message.empty())
-                {
-                    status_message = "Camera added via NVR Server.";
-                }
-            }
-
-            camera.name = display_name;
-            camera.ip = request.rtsp_url;
-            camera.via_server = true;
-            camera.original_uri = request.rtsp_url;
-            camera.segment = request.segment;
-            camera.recording = request.recording;
-            camera.overlay = request.overlay;
-            camera.motion_frame = request.motion_frame;
-            camera.gstreamer_proxy = request.gstreamer_proxy;
-            camera.live555_proxy = request.live555_proxy;
-            camera.segment_bitrate = request.segment_bitrate;
-            camera.segment_speed_preset = request.segment_speed_preset;
-            camera.proxy_bitrate = request.proxy_bitrate;
-            camera.proxy_speed_preset = request.proxy_speed_preset;
-            camera.motion_frame_width = request.motion_frame_width;
-            camera.motion_frame_height = request.motion_frame_height;
-            camera.motion_frame_scale = request.motion_frame_scale;
-            camera.noise_threshold = request.noise_threshold;
-            camera.motion_threshold = request.motion_threshold;
-            camera.motion_min_hits = request.motion_min_hits;
-            camera.motion_decay = request.motion_decay;
-            camera.motion_arrow_scale = request.motion_arrow_scale;
-            camera.motion_arrow_thickness = request.motion_arrow_thickness;
-
-            if (request.gstreamer_proxy || request.live555_proxy)
-            {
-                std::string proxied = build_proxy_rtsp_url(request.server_endpoint, request.name);
-                if (!proxied.empty())
-                {
-                    camera.ip = proxied;
-                    status_message += " Stream available at " + proxied + '.';
-                }
-            }
-
-            client_config.server_endpoint = request.server_endpoint;
-            auto host = extract_host_from_endpoint(request.server_endpoint);
-            if (!host.empty())
-            {
-                client_config.server_ip = host;
-            }
+        status_message = network_result.message;
+        trim_in_place(status_message);
+        if (status_message.empty()) {
+          status_message = "Camera added via NVR Server.";
         }
-        else
-        {
-            if (display_name.empty())
-            {
-                display_name = request.rtsp_url;
-            }
-            camera.name = display_name;
-            camera.ip = request.rtsp_url;
-            camera.via_server = false;
-            
-            // Copy RTSP settings from ConfigurationPanel's temp config (for direct connections)
-            if (configuration_panel_ptr)
-            {
-                const auto& temp_rtsp_config = configuration_panel_ptr->getTempRTSPConfig();
-                camera.rtsp_transport = temp_rtsp_config.rtsp_transport;
-                camera.rtsp_timeout_seconds = temp_rtsp_config.rtsp_timeout_seconds;
-                camera.max_delay_ms = temp_rtsp_config.max_delay_ms;
-                camera.buffer_size_kb = temp_rtsp_config.buffer_size_kb;
-                camera.rtsp_flags_prefer_tcp = temp_rtsp_config.rtsp_flags_prefer_tcp;
-                camera.fflags_nobuffer = temp_rtsp_config.fflags_nobuffer;
-                camera.probesize_kb = temp_rtsp_config.probesize_kb;
-                camera.analyzeduration_ms = temp_rtsp_config.analyzeduration_ms;
-                camera.low_latency = temp_rtsp_config.low_latency;
-                camera.thread_count = temp_rtsp_config.thread_count;
-                camera.hwaccel = temp_rtsp_config.hwaccel;
-            }
-            
-            // Copy frame rate limiting setting
-            camera.limit_frame_rate = request.limit_frame_rate;
-            
-            status_message = "Camera added directly.";
-            if (!camera.ip.empty())
-            {
-                status_message += " Stream available at " + camera.ip + '.';
-            }
+      }
+
+      camera.name = display_name;
+      camera.ip = request.rtsp_url;
+      camera.via_server = true;
+      camera.original_uri = request.rtsp_url;
+      camera.segment = request.segment;
+      camera.recording = request.recording;
+      camera.overlay = request.overlay;
+      camera.motion_frame = request.motion_frame;
+      camera.gstreamer_proxy = request.gstreamer_proxy;
+      camera.live555_proxy = request.live555_proxy;
+      camera.segment_bitrate = request.segment_bitrate;
+      camera.segment_speed_preset = request.segment_speed_preset;
+      camera.proxy_bitrate = request.proxy_bitrate;
+      camera.proxy_speed_preset = request.proxy_speed_preset;
+      camera.motion_frame_width = request.motion_frame_width;
+      camera.motion_frame_height = request.motion_frame_height;
+      camera.motion_frame_scale = request.motion_frame_scale;
+      camera.noise_threshold = request.noise_threshold;
+      camera.motion_threshold = request.motion_threshold;
+      camera.motion_min_hits = request.motion_min_hits;
+      camera.motion_decay = request.motion_decay;
+      camera.motion_arrow_scale = request.motion_arrow_scale;
+      camera.motion_arrow_thickness = request.motion_arrow_thickness;
+
+      if (request.gstreamer_proxy || request.live555_proxy) {
+        std::string proxied =
+            build_proxy_rtsp_url(request.server_endpoint, request.name);
+        if (!proxied.empty()) {
+          camera.ip = proxied;
+          status_message += " Stream available at " + proxied + '.';
         }
+      }
 
-        if (camera.name.empty())
-        {
-            camera.name = camera.ip.empty() ? kUnknownCameraName : camera.ip;
+      client_config.server_endpoint = request.server_endpoint;
+      auto host = extract_host_from_endpoint(request.server_endpoint);
+      if (!host.empty()) {
+        client_config.server_ip = host;
+      }
+    } else {
+      if (display_name.empty()) {
+        display_name = request.rtsp_url;
+      }
+      camera.name = display_name;
+      camera.ip = request.rtsp_url;
+      camera.via_server = false;
+
+      // Copy RTSP settings from ConfigurationPanel's temp config (for direct
+      // connections)
+      if (configuration_panel_ptr) {
+        const auto &temp_rtsp_config =
+            configuration_panel_ptr->getTempRTSPConfig();
+        camera.rtsp_transport = temp_rtsp_config.rtsp_transport;
+        camera.rtsp_timeout_seconds = temp_rtsp_config.rtsp_timeout_seconds;
+        camera.max_delay_ms = temp_rtsp_config.max_delay_ms;
+        camera.buffer_size_kb = temp_rtsp_config.buffer_size_kb;
+        camera.rtsp_flags_prefer_tcp = temp_rtsp_config.rtsp_flags_prefer_tcp;
+        camera.fflags_nobuffer = temp_rtsp_config.fflags_nobuffer;
+        camera.probesize_kb = temp_rtsp_config.probesize_kb;
+        camera.analyzeduration_ms = temp_rtsp_config.analyzeduration_ms;
+        camera.low_latency = temp_rtsp_config.low_latency;
+        camera.thread_count = temp_rtsp_config.thread_count;
+        camera.hwaccel = temp_rtsp_config.hwaccel;
+      }
+
+      // Copy frame rate limiting setting
+      camera.limit_frame_rate = request.limit_frame_rate;
+
+      status_message = "Camera added directly.";
+      if (!camera.ip.empty()) {
+        status_message += " Stream available at " + camera.ip + '.';
+      }
+    }
+
+    if (camera.name.empty()) {
+      camera.name = camera.ip.empty() ? kUnknownCameraName : camera.ip;
+    }
+
+    int new_index = stream_count;
+    GRID_LOG("New camera will be at index: " << new_index);
+
+    // Pre-resize canvas if we have dimensions from probe (direct connections
+    // only)
+    if (!request.connect_via_server && probe_result.success &&
+        probe_result.width > 0 && probe_result.height > 0) {
+      GRID_LOG("Pre-resizing canvas for probed dimensions: "
+               << probe_result.width << "x" << probe_result.height);
+
+      // Update reference dimensions if needed
+      if (!reference_dimensions_ready || single_w != probe_result.width ||
+          single_h != probe_result.height) {
+        single_w = probe_result.width;
+        single_h = probe_result.height;
+        reference_dimensions_ready = true;
+
+        if (ensure_canvas_dimensions) {
+          if (!ensure_canvas_dimensions(single_w, single_h,
+                                        placeholder_dimensions)) {
+            GRID_LOG("Pre-resize canvas FAILED");
+          } else {
+            GRID_LOG("Pre-resize canvas SUCCESS: "
+                     << canvas_w << "x" << canvas_h << " (cell: " << single_w
+                     << "x" << single_h << ")");
+          }
         }
+      } else {
+        GRID_LOG("Canvas already correct size from previous streams");
+      }
+    }
 
-        int new_index = stream_count;
-        GRID_LOG("New camera will be at index: " << new_index);
+    stream_configs.push_back(camera);
+    stream_urls.push_back(camera.ip);
+    stream_names.push_back(camera.name.empty() ? kUnknownCameraName
+                                               : camera.name);
+    streams.emplace_back();
+    overlay_always_show_stream.push_back(false);
+    stream_retry_deadlines.push_back(std::chrono::steady_clock::time_point{});
+    stream_last_frame_times.push_back(std::chrono::steady_clock::time_point{});
+    stream_stall_reported.push_back(false);
+    stream_count = static_cast<int>(stream_configs.size());
 
-        // Pre-resize canvas if we have dimensions from probe (direct connections only)
-        if (!request.connect_via_server && probe_result.success && probe_result.width > 0 && probe_result.height > 0)
-        {
-            GRID_LOG("Pre-resizing canvas for probed dimensions: " << probe_result.width << "x" << probe_result.height);
+    GRID_LOG("After vector updates: stream_count="
+             << stream_count << ", streams.size()=" << streams.size());
+    GRID_LOG("Attempting to open stream at: " << stream_urls[new_index]);
 
-            // Update reference dimensions if needed
-            if (!reference_dimensions_ready || single_w != probe_result.width || single_h != probe_result.height)
-            {
-                single_w = probe_result.width;
-                single_h = probe_result.height;
-                reference_dimensions_ready = true;
+    bool opened_immediately =
+        open_stream(new_index, stream_urls[new_index], new_index == 0);
+    GRID_LOG(
+        "open_stream returned: " << (opened_immediately ? "true" : "false"));
+    if (!opened_immediately) {
+      release_stream(streams[new_index]);
 
-                if (ensure_canvas_dimensions)
-                {
-                    if (!ensure_canvas_dimensions(single_w, single_h, placeholder_dimensions))
-                    {
-                        GRID_LOG("Pre-resize canvas FAILED");
-                    }
-                    else
-                    {
-                        GRID_LOG("Pre-resize canvas SUCCESS: " << canvas_w << "x" << canvas_h << " (cell: " << single_w << "x" << single_h << ")");
-                    }
-                }
-            }
-            else
-            {
-                GRID_LOG("Canvas already correct size from previous streams");
-            }
-        }
+      if (request.connect_via_server) {
+        // DO NOT resize canvas for failed streams - just schedule retry
+        // The canvas will be properly sized when the stream successfully opens
 
-        stream_configs.push_back(camera);
-        stream_urls.push_back(camera.ip);
-        stream_names.push_back(camera.name.empty() ? kUnknownCameraName : camera.name);
-        streams.emplace_back();
-        overlay_always_show_stream.push_back(false);
-        stream_retry_deadlines.push_back(std::chrono::steady_clock::time_point{});
-        stream_last_frame_times.push_back(std::chrono::steady_clock::time_point{});
-        stream_stall_reported.push_back(false);
+        schedule_stream_retry(new_index, kStreamRetryInitialDelay);
+        status_message =
+            "Camera registered. Waiting for stream to become available...";
+        result.success = true;
+        result.message = status_message;
+        GRID_LOG("ADD CAMERA: Stream not available, scheduled for retry "
+                 "(canvas NOT resized)");
+      } else {
+        GRID_LOG("ADD CAMERA ROLLBACK: Removing failed direct stream");
+        streams.pop_back();
+        overlay_always_show_stream.pop_back();
+        stream_retry_deadlines.pop_back();
+        stream_last_frame_times.pop_back();
+        stream_stall_reported.pop_back();
+        stream_configs.pop_back();
+        stream_urls.pop_back();
+        stream_names.pop_back();
         stream_count = static_cast<int>(stream_configs.size());
 
-        GRID_LOG("After vector updates: stream_count=" << stream_count << ", streams.size()=" << streams.size());
-        GRID_LOG("Attempting to open stream at: " << stream_urls[new_index]);
-
-        bool opened_immediately = open_stream(new_index, stream_urls[new_index], new_index == 0);
-        GRID_LOG("open_stream returned: " << (opened_immediately ? "true" : "false"));
-        if (!opened_immediately)
-        {
-            release_stream(streams[new_index]);
-
-            if (request.connect_via_server)
-            {
-                // DO NOT resize canvas for failed streams - just schedule retry
-                // The canvas will be properly sized when the stream successfully opens
-
-                schedule_stream_retry(new_index, kStreamRetryInitialDelay);
-                status_message = "Camera registered. Waiting for stream to become available...";
-                result.success = true;
-                result.message = status_message;
-                GRID_LOG("ADD CAMERA: Stream not available, scheduled for retry (canvas NOT resized)");
-            }
-            else
-            {
-                GRID_LOG("ADD CAMERA ROLLBACK: Removing failed direct stream");
-                streams.pop_back();
-                overlay_always_show_stream.pop_back();
-                stream_retry_deadlines.pop_back();
-                stream_last_frame_times.pop_back();
-                stream_stall_reported.pop_back();
-                stream_configs.pop_back();
-                stream_urls.pop_back();
-                stream_names.pop_back();
-                stream_count = static_cast<int>(stream_configs.size());
-
-                result.success = false;
-                result.message = "Failed to open new stream locally.";
-                GRID_LOG("After rollback: stream_count=" << stream_count << ", streams.size()=" << streams.size());
-                return result;
-            }
-        }
-        else
-        {
-            GRID_LOG("ADD CAMERA: Stream opened successfully");
-            record_stream_open(new_index);
-
-            if (new_index == 0)
-            {
-                if (!configure_audio(streams[0]))
-                {
-                    std::cerr << "Failed to configure audio for new stream" << "\n";
-                }
-            }
-
-            // Canvas should already be sized from probe (for direct connections)
-            // For via_server connections, we need to resize now
-            if (ensure_canvas_dimensions && streams[new_index].vctx &&
-                streams[new_index].vctx->width > 0 && streams[new_index].vctx->height > 0)
-            {
-                int stream_w = streams[new_index].vctx->width;
-                int stream_h = streams[new_index].vctx->height;
-
-                // Check if dimensions differ from what we expect
-                if (!request.connect_via_server && probe_result.success)
-                {
-                    // Direct connection - should match probe
-                    if (stream_w != single_w || stream_h != single_h)
-                    {
-                        GRID_LOG("WARNING: Stream dimensions differ from probe! Stream: " << stream_w << "x" << stream_h << ", Expected: " << single_w << "x" << single_h);
-                        GRID_LOG("Resizing canvas to match actual stream");
-                        if (!ensure_canvas_dimensions(stream_w, stream_h, false))
-                        {
-                            std::cerr << "Failed to resize canvas for new stream." << "\n";
-                            GRID_LOG("Canvas resize FAILED");
-                        }
-                        else
-                        {
-                            GRID_LOG("Canvas resized: " << canvas_w << "x" << canvas_h << " (cell: " << single_w << "x" << single_h << ")");
-                        }
-                    }
-                    else
-                    {
-                        GRID_LOG("Stream dimensions match probe, canvas already sized correctly");
-                    }
-                }
-                else
-                {
-                    // Via server connection - need to resize now
-                    bool need_resize = !reference_dimensions_ready ||
-                                       stream_w != single_w ||
-                                       stream_h != single_h;
-
-                    if (need_resize)
-                    {
-                        GRID_LOG("Resizing canvas for via_server stream: " << stream_w << "x" << stream_h);
-                        if (!ensure_canvas_dimensions(stream_w, stream_h, placeholder_dimensions))
-                        {
-                            std::cerr << "Failed to resize canvas for new stream." << "\n";
-                            GRID_LOG("Canvas resize FAILED");
-                        }
-                        else
-                        {
-                            GRID_LOG("Canvas resized successfully: " << canvas_w << "x" << canvas_h << " (cell: " << single_w << "x" << single_h << ")");
-                        }
-                    }
-                    else
-                    {
-                        GRID_LOG("Canvas dimensions unchanged, no resize needed");
-                    }
-                }
-            }
-
-            start_stream_worker(new_index);
-            GRID_LOG("Worker started for stream " << new_index);
-        }
-
-        bool persisted = persist_config();
-        if (!persisted)
-        {
-            status_message += " Configuration not saved.";
-        }
-
-        if (status_message.empty())
-        {
-            status_message = opened_immediately ? "Camera added." : "Camera registered. Waiting for stream to become available...";
-        }
-        result.message = status_message;
-        result.success = opened_immediately || request.connect_via_server;
+        result.success = false;
+        result.message = "Failed to open new stream locally.";
+        GRID_LOG("After rollback: stream_count="
+                 << stream_count << ", streams.size()=" << streams.size());
         return result;
-    };
+      }
+    } else {
+      GRID_LOG("ADD CAMERA: Stream opened successfully");
+      record_stream_open(new_index);
 
-    bool show_metrics_window = window_settings.show_imgui_metrics;
+      if (new_index == 0) {
+        if (!configure_audio(streams[0])) {
+          std::cerr << "Failed to configure audio for new stream" << "\n";
+        }
+      }
 
-    auto show_metrics_callback = [&](bool enabled)
+      // Canvas should already be sized from probe (for direct connections)
+      // For via_server connections, we need to resize now
+      if (ensure_canvas_dimensions && streams[new_index].vctx &&
+          streams[new_index].vctx->width > 0 &&
+          streams[new_index].vctx->height > 0) {
+        int stream_w = streams[new_index].vctx->width;
+        int stream_h = streams[new_index].vctx->height;
+
+        // Check if dimensions differ from what we expect
+        if (!request.connect_via_server && probe_result.success) {
+          // Direct connection - should match probe
+          if (stream_w != single_w || stream_h != single_h) {
+            GRID_LOG("WARNING: Stream dimensions differ from probe! Stream: "
+                     << stream_w << "x" << stream_h
+                     << ", Expected: " << single_w << "x" << single_h);
+            GRID_LOG("Resizing canvas to match actual stream");
+            if (!ensure_canvas_dimensions(stream_w, stream_h, false)) {
+              std::cerr << "Failed to resize canvas for new stream." << "\n";
+              GRID_LOG("Canvas resize FAILED");
+            } else {
+              GRID_LOG("Canvas resized: " << canvas_w << "x" << canvas_h
+                                          << " (cell: " << single_w << "x"
+                                          << single_h << ")");
+            }
+          } else {
+            GRID_LOG("Stream dimensions match probe, canvas already sized "
+                     "correctly");
+          }
+        } else {
+          // Via server connection - need to resize now
+          bool need_resize = !reference_dimensions_ready ||
+                             stream_w != single_w || stream_h != single_h;
+
+          if (need_resize) {
+            GRID_LOG("Resizing canvas for via_server stream: "
+                     << stream_w << "x" << stream_h);
+            if (!ensure_canvas_dimensions(stream_w, stream_h,
+                                          placeholder_dimensions)) {
+              std::cerr << "Failed to resize canvas for new stream." << "\n";
+              GRID_LOG("Canvas resize FAILED");
+            } else {
+              GRID_LOG("Canvas resized successfully: "
+                       << canvas_w << "x" << canvas_h << " (cell: " << single_w
+                       << "x" << single_h << ")");
+            }
+          } else {
+            GRID_LOG("Canvas dimensions unchanged, no resize needed");
+          }
+        }
+      }
+
+      start_stream_worker(new_index);
+      GRID_LOG("Worker started for stream " << new_index);
+    }
+
+    bool persisted = persist_config();
+    if (!persisted) {
+      status_message += " Configuration not saved.";
+    }
+
+    if (status_message.empty()) {
+      status_message =
+          opened_immediately
+              ? "Camera added."
+              : "Camera registered. Waiting for stream to become available...";
+    }
+    result.message = status_message;
+    result.success = opened_immediately || request.connect_via_server;
+    return result;
+  };
+
+  bool show_metrics_window = window_settings.show_imgui_metrics;
+
+  auto show_metrics_callback = [&](bool enabled) {
+    show_metrics_window = enabled;
+  };
+
+  auto get_cameras_callback =
+      [&]() -> std::vector<ConfigurationPanel::CameraInfo> {
+    std::vector<ConfigurationPanel::CameraInfo> cameras;
+
+    // Get cameras from server
+    auto server_cameras =
+        client_network::get_cameras_from_server(client_config.server_endpoint);
+
+    // Merge with local camera info
+    for (int i = 0; i < stream_count; ++i) {
+      ConfigurationPanel::CameraInfo info;
+      std::string cam_name = (i < static_cast<int>(stream_names.size()) &&
+                              !stream_names[i].empty())
+                                 ? stream_names[i]
+                                 : ("Stream " + std::to_string(i));
+      info.name = cam_name;
+      info.via_server = (i < static_cast<int>(stream_configs.size()))
+                            ? stream_configs[i].via_server
+                            : false;
+
+      // Try to find matching camera from server to get motion properties
+      bool found_in_server = false;
+      for (const auto &server_cam : server_cameras) {
+        if (server_cam.name == cam_name) {
+          info = server_cam; // Use server data which has all motion properties
+          info.via_server =
+              stream_configs[i].via_server; // Keep local via_server flag
+          found_in_server = true;
+          break;
+        }
+      }
+
+      // If not found in server, use local defaults
+      if (!found_in_server) {
+        info.motion_enabled = (i < static_cast<int>(stream_configs.size()))
+                                  ? stream_configs[i].motion_frame
+                                  : false;
+        info.motion_frame_scale = 1.0f;
+        info.noise_threshold = 1.0f;
+        info.motion_threshold = 5.0f;
+        info.motion_min_hits = 3;
+        info.motion_decay = 1;
+        info.motion_arrow_scale = 2.5f;
+        info.motion_arrow_thickness = 1;
+      }
+
+      cameras.push_back(info);
+    }
+    return cameras;
+  };
+
+  auto toggle_motion_callback = [&](const std::string &camera_name,
+                                    bool enable) -> bool {
+    bool result = client_network::toggle_motion_detection(
+        client_config.server_endpoint, camera_name, enable);
+    if (result) {
+      // Update local config
+      for (auto &config : stream_configs) {
+        if (config.name == camera_name) {
+          config.motion_frame = enable;
+          persist_config();
+          break;
+        }
+      }
+    }
+    return result;
+  };
+
+  SDL_Texture *motion_frame_texture = nullptr;
+  std::vector<unsigned char> motion_frame_jpeg_buffer;
+
+  auto fetch_motion_frame_callback = [&](const std::string &camera_name,
+                                         void *&texture_out, int &width_out,
+                                         int &height_out) -> bool {
+    MOTION_FRAME_LOG(
+        "fetch_motion_frame_callback called for camera: " << camera_name);
+
+    if (!renderer) {
+      MOTION_FRAME_LOG("ERROR: No renderer available");
+      return false;
+    }
+
+    // Check if we should use prefetched JPEG data (from async fetch)
     {
-        show_metrics_window = enabled;
-    };
-
-    auto get_cameras_callback = [&]() -> std::vector<ConfigurationPanel::CameraInfo>
-    {
-        std::vector<ConfigurationPanel::CameraInfo> cameras;
-
-        // Get cameras from server
-        auto server_cameras = client_network::get_cameras_from_server(client_config.server_endpoint);
-
-        // Merge with local camera info
-        for (int i = 0; i < stream_count; ++i)
-        {
-            ConfigurationPanel::CameraInfo info;
-            std::string cam_name = (i < static_cast<int>(stream_names.size()) && !stream_names[i].empty())
-                                       ? stream_names[i]
-                                       : ("Stream " + std::to_string(i));
-            info.name = cam_name;
-            info.via_server = (i < static_cast<int>(stream_configs.size())) ? stream_configs[i].via_server : false;
-
-            // Try to find matching camera from server to get motion properties
-            bool found_in_server = false;
-            for (const auto &server_cam : server_cameras)
-            {
-                if (server_cam.name == cam_name)
-                {
-                    info = server_cam;                              // Use server data which has all motion properties
-                    info.via_server = stream_configs[i].via_server; // Keep local via_server flag
-                    found_in_server = true;
-                    break;
-                }
-            }
-
-            // If not found in server, use local defaults
-            if (!found_in_server)
-            {
-                info.motion_enabled = (i < static_cast<int>(stream_configs.size())) ? stream_configs[i].motion_frame : false;
-                info.motion_frame_scale = 1.0f;
-                info.noise_threshold = 1.0f;
-                info.motion_threshold = 5.0f;
-                info.motion_min_hits = 3;
-                info.motion_decay = 1;
-                info.motion_arrow_scale = 2.5f;
-                info.motion_arrow_thickness = 1;
-            }
-
-            cameras.push_back(info);
+      std::lock_guard<std::mutex> lock(g_prefetched_jpeg_mutex);
+      if (g_use_prefetched_jpeg && !g_prefetched_motion_frame_jpeg.empty()) {
+        MOTION_FRAME_LOG("Using pre-fetched JPEG buffer, size: "
+                         << g_prefetched_motion_frame_jpeg.size()
+                         << " bytes (no network fetch)");
+        motion_frame_jpeg_buffer = g_prefetched_motion_frame_jpeg;
+        g_prefetched_motion_frame_jpeg.clear();
+      } else {
+        MOTION_FRAME_LOG("Fetching JPEG from server...");
+        if (!client_network::fetch_motion_frame_jpeg(
+                client_config.server_endpoint, camera_name,
+                motion_frame_jpeg_buffer)) {
+          MOTION_FRAME_LOG("ERROR: Failed to fetch JPEG from server");
+          return false;
         }
-        return cameras;
-    };
+        MOTION_FRAME_LOG("JPEG fetched, size: "
+                         << motion_frame_jpeg_buffer.size() << " bytes");
+      }
+    }
 
-    auto toggle_motion_callback = [&](const std::string &camera_name, bool enable) -> bool
-    {
-        bool result = client_network::toggle_motion_detection(client_config.server_endpoint, camera_name, enable);
-        if (result)
-        {
-            // Update local config
-            for (auto &config : stream_configs)
-            {
-                if (config.name == camera_name)
-                {
-                    config.motion_frame = enable;
-                    persist_config();
-                    break;
-                }
-            }
-        }
-        return result;
-    };
+    if (motion_frame_jpeg_buffer.empty()) {
+      MOTION_FRAME_LOG("ERROR: JPEG buffer is empty");
+      return false;
+    }
 
-    SDL_Texture *motion_frame_texture = nullptr;
-    std::vector<unsigned char> motion_frame_jpeg_buffer;
+    // Use FFmpeg to decode JPEG
+    MOTION_FRAME_LOG("Starting JPEG decode...");
+    AVCodecID codec_id = AV_CODEC_ID_MJPEG;
+    const AVCodec *codec = avcodec_find_decoder(codec_id);
+    if (!codec) {
+      MOTION_FRAME_LOG("ERROR: Failed to find MJPEG decoder");
+      return false;
+    }
 
-    auto fetch_motion_frame_callback = [&](const std::string &camera_name, void *&texture_out,
-                                           int &width_out, int &height_out) -> bool
-    {
-        MOTION_FRAME_LOG("fetch_motion_frame_callback called for camera: " << camera_name);
+    AVCodecContext *codec_ctx = avcodec_alloc_context3(codec);
+    if (!codec_ctx) {
+      return false;
+    }
 
-        if (!renderer)
-        {
-            MOTION_FRAME_LOG("ERROR: No renderer available");
-            return false;
-        }
+    if (avcodec_open2(codec_ctx, codec, nullptr) < 0) {
+      avcodec_free_context(&codec_ctx);
+      return false;
+    }
 
-        // Check if we should use prefetched JPEG data (from async fetch)
-        {
-            std::lock_guard<std::mutex> lock(g_prefetched_jpeg_mutex);
-            if (g_use_prefetched_jpeg && !g_prefetched_motion_frame_jpeg.empty())
-            {
-                MOTION_FRAME_LOG("Using pre-fetched JPEG buffer, size: " << g_prefetched_motion_frame_jpeg.size() << " bytes (no network fetch)");
-                motion_frame_jpeg_buffer = g_prefetched_motion_frame_jpeg;
-                g_prefetched_motion_frame_jpeg.clear();
-            }
-            else
-            {
-                MOTION_FRAME_LOG("Fetching JPEG from server...");
-                if (!client_network::fetch_motion_frame_jpeg(client_config.server_endpoint, camera_name, motion_frame_jpeg_buffer))
-                {
-                    MOTION_FRAME_LOG("ERROR: Failed to fetch JPEG from server");
-                    return false;
-                }
-                MOTION_FRAME_LOG("JPEG fetched, size: " << motion_frame_jpeg_buffer.size() << " bytes");
-            }
-        }
-
-        if (motion_frame_jpeg_buffer.empty())
-        {
-            MOTION_FRAME_LOG("ERROR: JPEG buffer is empty");
-            return false;
-        }
-
-        // Use FFmpeg to decode JPEG
-        MOTION_FRAME_LOG("Starting JPEG decode...");
-        AVCodecID codec_id = AV_CODEC_ID_MJPEG;
-        const AVCodec *codec = avcodec_find_decoder(codec_id);
-        if (!codec)
-        {
-            MOTION_FRAME_LOG("ERROR: Failed to find MJPEG decoder");
-            return false;
-        }
-
-        AVCodecContext *codec_ctx = avcodec_alloc_context3(codec);
-        if (!codec_ctx)
-        {
-            return false;
-        }
-
-        if (avcodec_open2(codec_ctx, codec, nullptr) < 0)
-        {
-            avcodec_free_context(&codec_ctx);
-            return false;
-        }
-
-        AVPacket *pkt = av_packet_alloc();
-        AVFrame *frame = av_frame_alloc();
-        if (!pkt || !frame)
-        {
-            if (pkt)
-                av_packet_free(&pkt);
-            if (frame)
-                av_frame_free(&frame);
-            avcodec_free_context(&codec_ctx);
-            return false;
-        }
-
-        pkt->data = motion_frame_jpeg_buffer.data();
-        pkt->size = static_cast<int>(motion_frame_jpeg_buffer.size());
-
-        int ret = avcodec_send_packet(codec_ctx, pkt);
-        if (ret < 0)
-        {
-            av_packet_free(&pkt);
-            av_frame_free(&frame);
-            avcodec_free_context(&codec_ctx);
-            return false;
-        }
-
-        ret = avcodec_receive_frame(codec_ctx, frame);
-        if (ret < 0)
-        {
-            av_packet_free(&pkt);
-            av_frame_free(&frame);
-            avcodec_free_context(&codec_ctx);
-            return false;
-        }
-
-        // Convert to RGB24
-        SwsContext *sws_ctx = sws_getContext(
-            frame->width, frame->height, static_cast<AVPixelFormat>(frame->format),
-            frame->width, frame->height, AV_PIX_FMT_RGB24,
-            SWS_BILINEAR, nullptr, nullptr, nullptr);
-
-        if (!sws_ctx)
-        {
-            av_packet_free(&pkt);
-            av_frame_free(&frame);
-            avcodec_free_context(&codec_ctx);
-            return false;
-        }
-
-        // Use proper alignment for buffer allocation
-        int num_bytes = av_image_get_buffer_size(AV_PIX_FMT_RGB24, frame->width, frame->height, 32);
-        if (num_bytes < 0)
-        {
-            sws_freeContext(sws_ctx);
-            av_packet_free(&pkt);
-            av_frame_free(&frame);
-            avcodec_free_context(&codec_ctx);
-            return false;
-        }
-
-        uint8_t *rgb_buffer = static_cast<uint8_t *>(av_malloc(num_bytes));
-        if (!rgb_buffer)
-        {
-            sws_freeContext(sws_ctx);
-            av_packet_free(&pkt);
-            av_frame_free(&frame);
-            avcodec_free_context(&codec_ctx);
-            return false;
-        }
-
-        AVFrame *rgb_frame = av_frame_alloc();
-        if (!rgb_frame)
-        {
-            av_free(rgb_buffer);
-            sws_freeContext(sws_ctx);
-            av_packet_free(&pkt);
-            av_frame_free(&frame);
-            avcodec_free_context(&codec_ctx);
-            return false;
-        }
-
-        int fill_ret = av_image_fill_arrays(rgb_frame->data, rgb_frame->linesize, rgb_buffer,
-                                            AV_PIX_FMT_RGB24, frame->width, frame->height, 32);
-        if (fill_ret < 0)
-        {
-            av_frame_free(&rgb_frame);
-            av_free(rgb_buffer);
-            sws_freeContext(sws_ctx);
-            av_packet_free(&pkt);
-            av_frame_free(&frame);
-            avcodec_free_context(&codec_ctx);
-            return false;
-        }
-
-        sws_scale(sws_ctx, frame->data, frame->linesize, 0, frame->height,
-                  rgb_frame->data, rgb_frame->linesize);
-
-        // Check if texture needs to be recreated (different dimensions)
-        MOTION_FRAME_LOG("Decoded frame size: " << frame->width << "x" << frame->height);
-        if (motion_frame_texture)
-        {
-            int existing_w = 0, existing_h = 0;
-            SDL_QueryTexture(motion_frame_texture, nullptr, nullptr, &existing_w, &existing_h);
-            if (existing_w != frame->width || existing_h != frame->height)
-            {
-                MOTION_FRAME_LOG("Destroying old texture (dimension change)");
-                SDL_DestroyTexture(motion_frame_texture);
-                motion_frame_texture = nullptr;
-            }
-        }
-
-        // Create SDL texture if needed
-        if (!motion_frame_texture)
-        {
-            MOTION_FRAME_LOG("Creating new SDL texture: " << frame->width << "x" << frame->height);
-            motion_frame_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGB24,
-                                                     SDL_TEXTUREACCESS_STATIC, frame->width, frame->height);
-        }
-
-        bool success = false;
-        if (motion_frame_texture)
-        {
-            MOTION_FRAME_LOG("Updating SDL texture with RGB data...");
-            int update_ret = SDL_UpdateTexture(motion_frame_texture, nullptr, rgb_buffer, rgb_frame->linesize[0]);
-            if (update_ret == 0)
-            {
-                texture_out = motion_frame_texture;
-                width_out = frame->width;
-                height_out = frame->height;
-                success = true;
-                MOTION_FRAME_LOG("SUCCESS: Texture updated successfully");
-            }
-            else
-            {
-                MOTION_FRAME_LOG("ERROR: SDL_UpdateTexture failed: " << SDL_GetError());
-                SDL_DestroyTexture(motion_frame_texture);
-                motion_frame_texture = nullptr;
-            }
-        }
-        else
-        {
-            MOTION_FRAME_LOG("ERROR: Failed to create SDL texture");
-        }
-
-        MOTION_FRAME_LOG("Cleaning up FFmpeg resources");
-        av_free(rgb_buffer);
-        av_frame_free(&rgb_frame);
-        sws_freeContext(sws_ctx);
+    AVPacket *pkt = av_packet_alloc();
+    AVFrame *frame = av_frame_alloc();
+    if (!pkt || !frame) {
+      if (pkt)
         av_packet_free(&pkt);
+      if (frame)
         av_frame_free(&frame);
-        avcodec_free_context(&codec_ctx);
-
-        MOTION_FRAME_LOG("Callback complete, success=" << (success ? "true" : "false"));
-        return success;
-    };
-
-    auto add_motion_region_callback = [&](const std::string &camera_name, int x, int y, int w, int h, float angle) -> int
-    {
-        return client_network::add_motion_region(client_config.server_endpoint, camera_name, x, y, w, h, angle);
-    };
-
-    auto remove_motion_region_callback = [&](const std::string &camera_name, int region_id) -> bool
-    {
-        return client_network::remove_motion_region(client_config.server_endpoint, camera_name, region_id);
-    };
-
-    auto clear_motion_regions_callback = [&](const std::string &camera_name) -> bool
-    {
-        return client_network::clear_motion_regions(client_config.server_endpoint, camera_name);
-    };
-
-    auto get_motion_regions_callback = [&](const std::string &camera_name) -> std::vector<ConfigurationPanel::MotionRegion>
-    {
-        return client_network::get_motion_regions(client_config.server_endpoint, camera_name);
-    };
-
-    // Create async network worker for non-blocking network operations
-    AsyncNetworkWorker async_network_worker;
-
-    auto probe_stream_handler = [&](const std::string &url) -> ProbeStreamResult
-    {
-        GRID_LOG("PROBE STREAM: " << url);
-        auto probe = probe_rtsp_stream(url);
-
-        ProbeStreamResult result;
-        result.success = probe.success;
-        result.width = probe.width;
-        result.height = probe.height;
-        result.has_audio = probe.has_audio;
-        result.error_message = probe.error_message;
-
-        if (result.success)
-        {
-            std::cout << "Probe successful: " << result.width << "x" << result.height
-                      << ", audio=" << (result.has_audio ? "yes" : "no") << "\n";
-            GRID_LOG("PROBE SUCCESS: " << result.width << "x" << result.height << ", audio=" << result.has_audio);
-        }
-        else
-        {
-            std::cerr << "Probe failed: " << result.error_message << "\n";
-            GRID_LOG("PROBE FAILED: " << result.error_message);
-        }
-
-        return result;
-    };
-
-    ConfigurationPanel configuration_panel(window_settings, persist_window_settings, add_camera_handler,
-                                           probe_stream_handler, client_config.server_endpoint, nullptr, show_metrics_callback,
-                                           get_cameras_callback, toggle_motion_callback, fetch_motion_frame_callback,
-                                           add_motion_region_callback, remove_motion_region_callback,
-                                           clear_motion_regions_callback, get_motion_regions_callback);
-
-    // Set pointer for lambdas to access
-    configuration_panel_ptr = &configuration_panel;
-
-    // Connect async worker to configuration panel
-    configuration_panel.setAsyncWorker(&async_network_worker);
-
-    constexpr int kStartupRetryAttempts = 3;
-    constexpr std::chrono::milliseconds kStartupRetryDelay{1000};
-
-    for (int i = 0; i < stream_count; ++i)
-    {
-        GRID_LOG("Opening stream " << i << " (" << stream_names[i] << "): " << stream_urls[i]);
-        bool opened = false;
-        for (int attempt = 0; attempt < kStartupRetryAttempts && !opened; ++attempt)
-        {
-            if (attempt > 0)
-            {
-                std::cerr << "Retrying stream " << i << " (" << stream_names[i] << "), attempt " << (attempt + 1) << "/" << kStartupRetryAttempts << "...\n";
-                std::this_thread::sleep_for(kStartupRetryDelay);
-            }
-            opened = open_stream(i, stream_urls[i], i == 0);
-        }
-
-        if (opened)
-        {
-            record_stream_open(i);
-            GRID_LOG("Stream " << i << " opened successfully");
-        }
-        else
-        {
-            std::cerr << "Stream " << i << " (" << stream_names[i] << ") not available after " << kStartupRetryAttempts << " attempts. Will retry periodically.\n";
-            release_stream(streams[i]);
-            schedule_stream_retry(i, kStreamRetryInitialDelay);
-            GRID_LOG("Stream " << i << " failed to open, scheduled for retry");
-        }
+      avcodec_free_context(&codec_ctx);
+      return false;
     }
 
-    GRID_LOG("After startup: stream_count=" << stream_count << ", streams.size()=" << streams.size());
+    pkt->data = motion_frame_jpeg_buffer.data();
+    pkt->size = static_cast<int>(motion_frame_jpeg_buffer.size());
 
-    if (!reference_dimensions_ready)
-    {
-        single_w = kDefaultCellWidth;
-        single_h = kDefaultCellHeight;
-        placeholder_dimensions = true;
+    int ret = avcodec_send_packet(codec_ctx, pkt);
+    if (ret < 0) {
+      av_packet_free(&pkt);
+      av_frame_free(&frame);
+      avcodec_free_context(&codec_ctx);
+      return false;
     }
 
-    if (stream_count > 0)
-    {
-        VideoStreamCtx &audio_src = streams[0];
-        if (!configure_audio(audio_src))
-        {
-            return 6;
-        }
+    ret = avcodec_receive_frame(codec_ctx, frame);
+    if (ret < 0) {
+      av_packet_free(&pkt);
+      av_frame_free(&frame);
+      avcodec_free_context(&codec_ctx);
+      return false;
     }
 
-    for (int i = 0; i < stream_count; ++i)
-    {
-        start_stream_worker(i);
+    // Convert to RGB24
+    SwsContext *sws_ctx = sws_getContext(
+        frame->width, frame->height, static_cast<AVPixelFormat>(frame->format),
+        frame->width, frame->height, AV_PIX_FMT_RGB24, SWS_BILINEAR, nullptr,
+        nullptr, nullptr);
+
+    if (!sws_ctx) {
+      av_packet_free(&pkt);
+      av_frame_free(&frame);
+      avcodec_free_context(&codec_ctx);
+      return false;
     }
 
-    // --- SDL Video: one big canvas ---
-    canvas_w = std::max(single_w, 1) * GRID_COLS;
-    canvas_h = std::max(single_h, 1) * GRID_ROWS;
-
-    GRID_LOG("Canvas dimensions: " << canvas_w << "x" << canvas_h << " (cell: " << single_w << "x" << single_h << ", placeholder=" << placeholder_dimensions << ")");
-
-    win = SDL_CreateWindow(
-        "RTSP Grid Player",
-        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-        canvas_w, canvas_h,
-        SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
-    if (!win)
-    {
-        std::cerr << "Failed to create SDL window: " << SDL_GetError() << "\n";
-        return 1;
-    }
-    renderer = SDL_CreateRenderer(
-        win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-    if (!renderer)
-    {
-        std::cerr << "Failed to create SDL renderer: " << SDL_GetError() << "\n";
-        return 1;
+    // Use proper alignment for buffer allocation
+    int num_bytes = av_image_get_buffer_size(AV_PIX_FMT_RGB24, frame->width,
+                                             frame->height, 32);
+    if (num_bytes < 0) {
+      sws_freeContext(sws_ctx);
+      av_packet_free(&pkt);
+      av_frame_free(&frame);
+      avcodec_free_context(&codec_ctx);
+      return false;
     }
 
-    // Check if hardware acceleration is actually being used
-    SDL_RendererInfo renderer_info;
-    if (SDL_GetRendererInfo(renderer, &renderer_info) == 0)
-    {
-        PERF_LOG("SDL Renderer: " << renderer_info.name);
-        PERF_LOG("  Hardware accelerated: " << ((renderer_info.flags & SDL_RENDERER_ACCELERATED) ? "YES" : "NO"));
-        PERF_LOG("  Software fallback: " << ((renderer_info.flags & SDL_RENDERER_SOFTWARE) ? "YES" : "NO"));
-        PERF_LOG("  VSync: " << ((renderer_info.flags & SDL_RENDERER_PRESENTVSYNC) ? "YES" : "NO"));
-        PERF_LOG("  Max texture size: " << renderer_info.max_texture_width << "x" << renderer_info.max_texture_height);
+    uint8_t *rgb_buffer = static_cast<uint8_t *>(av_malloc(num_bytes));
+    if (!rgb_buffer) {
+      sws_freeContext(sws_ctx);
+      av_packet_free(&pkt);
+      av_frame_free(&frame);
+      avcodec_free_context(&codec_ctx);
+      return false;
     }
 
-    auto adjust_window_to_canvas = [&](bool allow_maximize)
-    {
-        if (!win)
-        {
-            return;
-        }
-
-        if (allow_maximize)
-        {
-            SDL_RestoreWindow(win);
-        }
-
-        int display_index = SDL_GetWindowDisplayIndex(win);
-        SDL_Rect usable_bounds{};
-        if (display_index >= 0 && SDL_GetDisplayUsableBounds(display_index, &usable_bounds) == 0)
-        {
-            int target_w = std::min(canvas_w, usable_bounds.w);
-            int target_h = std::min(canvas_h, usable_bounds.h);
-            SDL_SetWindowSize(win, target_w, target_h);
-            if (allow_maximize && (canvas_w >= usable_bounds.w || canvas_h >= usable_bounds.h))
-            {
-                SDL_MaximizeWindow(win);
-            }
-        }
-        else
-        {
-            SDL_SetWindowSize(win, canvas_w, canvas_h);
-        }
-    };
-
-    ensure_canvas_dimensions = [&](int desired_single_w, int desired_single_h, bool force) -> bool
-    {
-        if (!renderer || !win)
-        {
-            return false;
-        }
-
-        desired_single_w = std::max(desired_single_w, 1);
-        desired_single_h = std::max(desired_single_h, 1);
-
-        int target_canvas_w = desired_single_w * GRID_COLS;
-        int target_canvas_h = desired_single_h * GRID_ROWS;
-
-        // Don't skip resize if we're not forcing and dimensions match - we still need to
-        // ensure the canvas buffer is properly allocated for the current stream count
-        if (!force && desired_single_w == single_w && desired_single_h == single_h && texture &&
-            canvas_w == target_canvas_w && canvas_h == target_canvas_h &&
-            !canvas_buffer.empty() && canvas_linesize[0] > 0)
-        {
-            // Verify canvas buffer is actually valid before returning early
-            int expected_bytes = av_image_get_buffer_size(AV_PIX_FMT_RGB24, canvas_w, canvas_h, 1);
-            if (static_cast<int>(canvas_buffer.size()) == expected_bytes)
-            {
-                return true;
-            }
-            GRID_LOG("Canvas buffer size mismatch, forcing resize");
-        }
-
-        single_w = desired_single_w;
-        single_h = desired_single_h;
-        canvas_w = target_canvas_w;
-        canvas_h = target_canvas_h;
-
-        GRID_LOG("Resizing canvas to: " << canvas_w << "x" << canvas_h << " (cell: " << single_w << "x" << single_h << ")");
-
-        int bytes = av_image_get_buffer_size(AV_PIX_FMT_RGB24, canvas_w, canvas_h, 1);
-        if (bytes <= 0)
-        {
-            std::cerr << "Invalid canvas dimensions requested (" << canvas_w << "x" << canvas_h << ")." << "\n";
-            return false;
-        }
-
-        canvas_buffer.assign(static_cast<size_t>(bytes), 0);
-        canvas_data[0] = canvas_buffer.data();
-        canvas_data[1] = nullptr;
-        canvas_data[2] = nullptr;
-        canvas_data[3] = nullptr;
-        av_image_fill_linesizes(canvas_linesize, AV_PIX_FMT_RGB24, canvas_w);
-
-        if (texture)
-        {
-            SDL_DestroyTexture(texture);
-            texture = nullptr;
-        }
-        texture = SDL_CreateTexture(
-            renderer, SDL_PIXELFORMAT_RGB24,
-            SDL_TEXTUREACCESS_STREAMING, canvas_w, canvas_h);
-        if (!texture)
-        {
-            std::cerr << "Failed to create canvas texture: " << SDL_GetError() << "\n";
-            return false;
-        }
-
-        std::fill(canvas_buffer.begin(), canvas_buffer.end(), 0);
-        adjust_window_to_canvas(force);
-        placeholder_dimensions = false;
-
-        GRID_LOG("Canvas resize complete: " << canvas_w << "x" << canvas_h);
-        return true;
-    };
-
-    if (!ensure_canvas_dimensions(single_w, single_h, true))
-    {
-        std::cerr << "Failed to initialise canvas dimensions." << "\n";
-        return 1;
+    AVFrame *rgb_frame = av_frame_alloc();
+    if (!rgb_frame) {
+      av_free(rgb_buffer);
+      sws_freeContext(sws_ctx);
+      av_packet_free(&pkt);
+      av_frame_free(&frame);
+      avcodec_free_context(&codec_ctx);
+      return false;
     }
 
-    // --- Dear ImGui setup for a primitive context menu ---
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGui::StyleColorsDark();
-    ImGui_ImplSDL2_InitForSDLRenderer(win, renderer);
-    ImGui_ImplSDLRenderer2_Init(renderer);
-
-    bool show_context_menu = false;
-    bool menu_hovered = false;
-    ImVec2 context_menu_pos = ImVec2(0.0f, 0.0f);
-    int context_stream_index = -1;
-    int hovered_stream = -1;
-    bool reload_all_requested = false;
-    int reload_stream_requested = -1;
-    int remove_camera_requested = -1;
-    
-    // Setup RTSP configuration callbacks (must be after reload_stream_requested declaration)
-    auto get_rtsp_config = [&](int stream_index) -> CameraConfig& {
-        return stream_configs[stream_index];
-    };
-    
-    auto save_rtsp_config = [&]() {
-        sync_json_from_client_config(client_config_json, client_config);
-        try {
-            save_client_config(client_config_json, config_path);
-        } catch (const std::exception& err) {
-            std::cerr << "Warning: failed to save RTSP config: " << err.what() << "\n";
-        }
-    };
-    
-    auto reload_stream = [&](int stream_index) {
-        if (stream_index >= 0 && stream_index < stream_count) {
-            std::cerr << "Reloading stream " << stream_index << " (" << stream_names[stream_index] << ") with new RTSP config...\n";
-            reload_stream_requested = stream_index;
-        }
-    };
-    
-    configuration_panel.setRTSPConfigCallbacks(get_rtsp_config, save_rtsp_config, reload_stream);
-    
-    bool fullscreen_view = false;
-    bool window_is_fullscreen = false;
-    int fullscreen_stream = -1;
-    bool overlay_always_show_all = false;
-    bool show_configuration_panel = false;
-    bool show_diagnostics_overlay = false;
-
-    auto stream_index_from_point = [&](int px, int py) -> int
-    {
-        if (fullscreen_view && fullscreen_stream >= 0 && fullscreen_stream < stream_count)
-        {
-            return fullscreen_stream;
-        }
-        int out_w = 0;
-        int out_h = 0;
-        if (SDL_GetRendererOutputSize(renderer, &out_w, &out_h) != 0 || out_w == 0 || out_h == 0)
-        {
-            return -1;
-        }
-        int cell_w = out_w / GRID_COLS;
-        int cell_h = out_h / GRID_ROWS;
-        if (cell_w <= 0 || cell_h <= 0)
-        {
-            return -1;
-        }
-        int col = px / cell_w;
-        int row = py / cell_h;
-        if (col < 0 || col >= GRID_COLS || row < 0 || row >= GRID_ROWS)
-        {
-            return -1;
-        }
-        int idx = row * GRID_COLS + col;
-        if (idx >= stream_count)
-        {
-            return -1;
-        }
-        return idx;
-    };
-
-    auto clear_canvas_slot = [&](int idx)
-    {
-        if (single_w <= 0 || single_h <= 0 || idx < 0 || idx >= stream_count)
-        {
-            return;
-        }
-        int col = idx % GRID_COLS;
-        int row = idx / GRID_COLS;
-        int dst_x = col * single_w;
-        int dst_y = row * single_h;
-
-        uint8_t *dst = canvas_data[0] + dst_y * canvas_linesize[0] + dst_x * 3;
-        int dst_pitch = canvas_linesize[0];
-        for (int y = 0; y < single_h && (dst_y + y) < canvas_h; ++y)
-        {
-            std::memset(dst + y * dst_pitch, 0, single_w * 3);
-        }
-    };
-
-    bool quit = false;
-    SDL_Event event;
-
-    // Set up thread info callback now that quit is declared
-    auto thread_info_callback = [&]() -> std::vector<ConfigurationPanel::ThreadInfo>
-    {
-        std::vector<ConfigurationPanel::ThreadInfo> threads;
-
-        // Add info for each stream worker thread
-        for (int i = 0; i < stream_count; ++i)
-        {
-            ConfigurationPanel::ThreadInfo info;
-            std::string stream_label = (i < static_cast<int>(stream_names.size()) && !stream_names[i].empty())
-                                           ? stream_names[i]
-                                           : ("Stream " + std::to_string(i));
-            info.name = "Stream Worker: " + stream_label;
-
-            bool has_context = streams[i].fmt_ctx != nullptr;
-            bool worker_running = streams[i].worker.joinable();
-            bool worker_failed = streams[i].worker_failed.load();
-
-            info.is_active = has_context && worker_running && !worker_failed;
-
-            if (!has_context)
-            {
-                info.details = "Stream not opened";
-            }
-            else if (worker_failed)
-            {
-                info.details = "Worker failed";
-            }
-            else if (!worker_running)
-            {
-                info.details = "Worker not started";
-            }
-            else
-            {
-                info.details = "Processing video/audio packets";
-            }
-
-            threads.push_back(info);
-        }
-
-        // Client worker threads heading
-        ConfigurationPanel::ThreadInfo client_heading;
-        client_heading.name = "=== Client Workers ===";
-        client_heading.is_active = true;
-        client_heading.details = "";
-        threads.push_back(client_heading);
-
-        // Add async network worker thread info
-        ConfigurationPanel::ThreadInfo network_thread;
-        network_thread.name = "  Network Worker";
-        network_thread.is_active = async_network_worker.isRunning();
-        if (async_network_worker.isProcessing())
-        {
-            network_thread.details = "Processing network request";
-        }
-        else
-        {
-            size_t queue_size = async_network_worker.getQueueSize();
-            if (queue_size > 0)
-            {
-                network_thread.details = "Idle (" + std::to_string(queue_size) + " queued)";
-            }
-            else
-            {
-                network_thread.details = "Idle (no tasks)";
-            }
-        }
-        threads.push_back(network_thread);
-
-        // Add motion frame worker thread info
-        if (auto *motion_worker = configuration_panel.getMotionFrameWorker())
-        {
-            ConfigurationPanel::ThreadInfo motion_thread;
-            motion_thread.name = "  Motion Frame Worker";
-            motion_thread.is_active = motion_worker->isRunning();
-            if (motion_worker->isProcessing())
-            {
-                motion_thread.details = "Fetching motion frame";
-            }
-            else
-            {
-                size_t queue_size = motion_worker->getQueueSize();
-                if (queue_size > 0)
-                {
-                    motion_thread.details = "Idle (" + std::to_string(queue_size) + " queued)";
-                }
-                else
-                {
-                    motion_thread.details = "Idle (no tasks)";
-                }
-            }
-            threads.push_back(motion_thread);
-        }
-
-        // Add main thread info
-        ConfigurationPanel::ThreadInfo main_thread;
-        main_thread.name = "  Main Thread";
-        main_thread.is_active = !quit;
-        main_thread.details = quit ? "Shutting down" : "Event loop, rendering, ImGui";
-        threads.push_back(main_thread);
-
-        // Note: Server threads are fetched asynchronously by ConfigurationPanel
-        // and displayed separately to avoid blocking the UI
-
-        return threads;
-    };
-    configuration_panel.setThreadInfoCallback(thread_info_callback);
-
-    // Helper lambda: blit stream i’s RGB frame into its quadrant
-    auto blit_stream_to_canvas = [&](int idx)
-    {
-        if (idx < 0 || idx >= stream_count)
-        {
-            return;
-        }
-        VideoStreamCtx &s = streams[idx];
-        int col = idx % GRID_COLS;
-        int row = idx / GRID_COLS;
-
-        int dst_x = col * single_w;
-        int dst_y = row * single_h;
-        uint8_t *dst = canvas_data[0] + dst_y * canvas_linesize[0] + dst_x * 3;
-        int dst_pitch = canvas_linesize[0];
-        bool frame_copied = false;
-
-        {
-            std::lock_guard<std::mutex> lock(s.frame_mutex);
-            if (!s.vctx || !s.vframe_rgb || s.frame_width <= 0 || s.frame_height <= 0)
-            {
-                return;
-            }
-            if (!s.frame_available || s.frame_generation == s.last_consumed_generation)
-            {
-                return;
-            }
-
-            uint8_t *src = s.vframe_rgb->data[0];
-            int src_pitch = s.rgb_linesize;
-            for (int y = 0; y < s.frame_height && y + dst_y < canvas_h; ++y)
-            {
-                std::memcpy(dst + y * dst_pitch,
-                            src + y * src_pitch,
-                            s.frame_width * 3);
-            }
-            s.last_consumed_generation = s.frame_generation;
-            frame_copied = true;
-        }
-
-        if (frame_copied)
-        {
-            std::lock_guard<std::mutex> lock(stream_state_mutex);
-            if (idx < static_cast<int>(stream_last_frame_times.size()))
-            {
-                stream_last_frame_times[idx] = std::chrono::steady_clock::now();
-            }
-            if (idx < static_cast<int>(stream_stall_reported.size()))
-            {
-                stream_stall_reported[idx] = false;
-            }
-        }
-    };
-
-    // --- Main loop: round-robin reading ---
-#ifdef DEBUG_LOGGING
-    std::cerr << "[diag] entering main loop" << "\n";
-#endif
-    while (!quit)
-    {
-#ifdef DEBUG_LOGGING
-        std::cerr << "[diag] top of loop quit flag: " << quit << "\n";
-#endif
-        while (SDL_PollEvent(&event))
-        {
-#ifdef DEBUG_LOGGING
-            std::cerr << "[diag] SDL event type: " << event.type << "\n";
-#endif
-            ImGui_ImplSDL2_ProcessEvent(&event);
-            if (event.type == SDL_QUIT)
-            {
-#ifdef DEBUG_LOGGING
-                std::cerr << "[diag] SDL_QUIT received" << "\n";
-#endif
-                quit = true;
-            }
-            else if (event.type == SDL_KEYDOWN)
-            {
-#ifdef DEBUG_LOGGING
-                std::cerr << "[diag] SDL keydown: " << SDL_GetKeyName(event.key.keysym.sym) << "\n";
-#endif
-                if (event.key.keysym.sym == SDLK_q || event.key.keysym.sym == SDLK_ESCAPE)
-                    quit = true;
-            }
-            else if (event.type == SDL_MOUSEBUTTONDOWN)
-            {
-                if (event.button.button == SDL_BUTTON_RIGHT)
-                {
-                    context_stream_index = stream_index_from_point(event.button.x, event.button.y);
-                    show_context_menu = true;
-                    context_menu_pos = ImVec2(static_cast<float>(event.button.x),
-                                              static_cast<float>(event.button.y));
-                }
-                else if (event.button.button == SDL_BUTTON_LEFT)
-                {
-                    if (show_context_menu && !menu_hovered)
-                    {
-                        show_context_menu = false;
-                    }
-                    else if (!show_context_menu && !fullscreen_view)
-                    {
-                        // Switch audio source on left-click
-                        int clicked_stream = stream_index_from_point(event.button.x, event.button.y);
-                        if (clicked_stream >= 0 && clicked_stream < stream_count &&
-                            clicked_stream != active_audio_stream.load() &&
-                            streams[clicked_stream].fmt_ctx)
-                        {
-                            int prev_stream = active_audio_stream.load();
-                            AUDIO_LOG("Switching audio from stream " << prev_stream << " to stream " << clicked_stream);
-                            active_audio_stream.store(clicked_stream);
-                            if (!configure_audio(streams[clicked_stream]))
-                            {
-                                std::cerr << "Failed to configure audio for clicked stream\n";
-                            }
-                            else
-                            {
-                                audio_controls_last_interaction_time = std::chrono::steady_clock::now();
-                                // Show notification
-                                std::string to_name = (clicked_stream < static_cast<int>(stream_names.size()) && !stream_names[clicked_stream].empty())
-                                                          ? stream_names[clicked_stream]
-                                                          : ("Stream " + std::to_string(clicked_stream));
-                                audio_switch_notification = "Audio: " + to_name;
-                                audio_switch_notification_time = std::chrono::steady_clock::now();
-                            }
-                        }
-                    }
-                }
-            }
-            else if (event.type == SDL_MOUSEMOTION)
-            {
-                last_pointer_activity_time = std::chrono::steady_clock::now();
-                hovered_stream = stream_index_from_point(event.motion.x, event.motion.y);
-            }
-            else if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_LEAVE)
-            {
-                hovered_stream = -1;
-            }
-        }
-
-#ifdef DEBUG_LOGGING
-        std::cerr << "[diag] quit flag after events: " << quit << "\n";
-#endif
-
-        ImGui_ImplSDLRenderer2_NewFrame();
-        ImGui_ImplSDL2_NewFrame();
-        ImGui::NewFrame();
-        const auto frame_now = std::chrono::steady_clock::now();
-
-        int effective_hovered_stream = hovered_stream;
-        if (effective_hovered_stream >= 0 && (frame_now - last_pointer_activity_time) > kOverlayAutoHideDuration)
-        {
-            effective_hovered_stream = -1;
-        }
-        const double stall_threshold_seconds = std::chrono::duration<double>(kStreamStallThreshold).count();
-
-        for (int i = 0; i < stream_count; ++i)
-        {
-            blit_stream_to_canvas(i);
-        }
-
-        for (int i = 0; i < stream_count; ++i)
-        {
-            if (!streams[i].pending_reference_update.load())
-            {
-                continue;
-            }
-
-            int new_w = 0;
-            int new_h = 0;
-            bool have_dimensions = false;
-            {
-                std::lock_guard<std::mutex> lock(streams[i].frame_mutex);
-                if (streams[i].frame_width > 0 && streams[i].frame_height > 0)
-                {
-                    new_w = streams[i].frame_width;
-                    new_h = streams[i].frame_height;
-                    have_dimensions = true;
-                }
-                streams[i].pending_reference_update.store(false);
-            }
-
-            if (!have_dimensions)
-            {
-                continue;
-            }
-
-            bool update_reference = !reference_dimensions_ready || i == 0;
-            if (update_reference)
-            {
-                single_w = new_w;
-                single_h = new_h;
-                reference_dimensions_ready = true;
-                placeholder_dimensions = false;
-                if (ensure_canvas_dimensions)
-                {
-                    ensure_canvas_dimensions(single_w, single_h, false);
-                }
-            }
-        }
-
-        for (int i = 0; i < stream_count; ++i)
-        {
-            if (!streams[i].worker_failed.load())
-            {
-                continue;
-            }
-
-            std::string stream_label = (i < static_cast<int>(stream_names.size()) && !stream_names[i].empty())
-                                           ? stream_names[i]
-                                           : ("Stream " + std::to_string(i));
-#ifdef DEBUG_LOGGING
-            std::cerr << "[diag] Worker failure detected for \"" << stream_label << "\"\n";
-#endif
-            release_stream(streams[i]);
-            clear_canvas_slot(i);
-            schedule_stream_retry(i, kStreamRetryInitialDelay);
-        }
-
-        if (show_context_menu)
-        {
-            ImGui::SetNextWindowPos(context_menu_pos, ImGuiCond_Always, ImVec2(0.0f, 0.0f));
-            ImGui::SetNextWindowBgAlpha(0.9f);
-            menu_hovered = false;
-            if (ImGui::Begin("##context_menu", &show_context_menu,
-                             ImGuiWindowFlags_NoDecoration |
-                                 ImGuiWindowFlags_AlwaysAutoResize |
-                                 ImGuiWindowFlags_NoMove |
-                                 ImGuiWindowFlags_NoSavedSettings))
-            {
-                if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup |
-                                           ImGuiHoveredFlags_AllowWhenBlockedByActiveItem))
-                {
-                    menu_hovered = true;
-                }
-                ImGui::TextUnformatted("Actions");
-                ImGui::Separator();
-                bool can_reload_stream = context_stream_index >= 0 && context_stream_index < stream_count;
-                if (ImGui::MenuItem("Reload this stream", nullptr, false, can_reload_stream))
-                {
-                    reload_stream_requested = context_stream_index;
-                    show_context_menu = false;
-                }
-                if (ImGui::MenuItem("Reload all streams"))
-                {
-                    reload_all_requested = true;
-                    show_context_menu = false;
-                }
-                ImGui::Separator();
-                bool can_toggle_overlay = context_stream_index >= 0 && context_stream_index < stream_count;
-                if (ImGui::MenuItem("Always show overlay (stream)", nullptr,
-                                    can_toggle_overlay ? overlay_always_show_stream[context_stream_index] : false,
-                                    can_toggle_overlay))
-                {
-                    overlay_always_show_stream[context_stream_index] = !overlay_always_show_stream[context_stream_index];
-                }
-                if (ImGui::MenuItem("Always show overlay (all streams)", nullptr, overlay_always_show_all))
-                {
-                    overlay_always_show_all = !overlay_always_show_all;
-                    std::fill(overlay_always_show_stream.begin(), overlay_always_show_stream.end(), overlay_always_show_all);
-                }
-                ImGui::Separator();
-                if (ImGui::MenuItem("Diagnostics overlay", nullptr, show_diagnostics_overlay))
-                {
-                    show_diagnostics_overlay = !show_diagnostics_overlay;
-                }
-                ImGui::Separator();
-                if (ImGui::MenuItem("Configuration", nullptr, show_configuration_panel))
-                {
-                    show_configuration_panel = true;
-                    configuration_panel.requestTab(ConfigurationPanel::Tab::General);
-                    show_context_menu = false;
-                }
-                if (ImGui::MenuItem("Add Camera"))
-                {
-                    show_configuration_panel = true;
-                    configuration_panel.requestTab(ConfigurationPanel::Tab::AddCamera);
-                    show_context_menu = false;
-                }
-                // Remove Camera - only enabled if clicking on a valid camera stream
-                bool can_remove_camera = context_stream_index >= 0 &&
-                                         context_stream_index < static_cast<int>(stream_configs.size());
-                if (ImGui::MenuItem("Remove Camera", nullptr, false, can_remove_camera))
-                {
-                    remove_camera_requested = context_stream_index;
-                    show_context_menu = false;
-                }
-                // More stream settings - only enabled if clicking on a valid camera stream
-                bool can_configure_rtsp = context_stream_index >= 0 &&
-                                          context_stream_index < static_cast<int>(stream_configs.size());
-                if (ImGui::MenuItem("More stream settings", nullptr, false, can_configure_rtsp))
-                {
-                    configuration_panel.requestRTSPConfig(context_stream_index);
-                    show_context_menu = false;
-                }
-                // Motion Frames menu item (always enabled)
-                if (ImGui::MenuItem("Motion Frames"))
-                {
-                    show_configuration_panel = true;
-                    configuration_panel.requestTab(ConfigurationPanel::Tab::MotionFrame);
-                    show_context_menu = false;
-                }
-                if (ImGui::MenuItem("Show Info"))
-                {
-                    show_configuration_panel = true;
-                    configuration_panel.requestTab(ConfigurationPanel::Tab::Info);
-                    show_context_menu = false;
-                }
-                ImGui::Separator();
-                if (!window_is_fullscreen)
-                {
-                    if (ImGui::MenuItem("Fullscreen window"))
-                    {
-                        if (SDL_SetWindowFullscreen(win, SDL_WINDOW_FULLSCREEN_DESKTOP) == 0)
-                        {
-                            window_is_fullscreen = true;
-                        }
-                        else
-                        {
-                            std::cerr << "Failed to fullscreen window: " << SDL_GetError() << "\n";
-                        }
-                        show_context_menu = false;
-                    }
-                }
-                else if (!fullscreen_view)
-                {
-                    if (ImGui::MenuItem("Exit fullscreen window"))
-                    {
-                        if (SDL_SetWindowFullscreen(win, 0) == 0)
-                        {
-                            window_is_fullscreen = false;
-                        }
-                        else
-                        {
-                            std::cerr << "Failed to exit fullscreen: " << SDL_GetError() << "\n";
-                        }
-                        show_context_menu = false;
-                    }
-                }
-                if (!fullscreen_view)
-                {
-                    bool can_fullscreen = context_stream_index >= 0 && context_stream_index < stream_count;
-                    if (ImGui::MenuItem("Fullscreen stream", nullptr, false, can_fullscreen))
-                    {
-                        if (!window_is_fullscreen)
-                        {
-                            if (SDL_SetWindowFullscreen(win, SDL_WINDOW_FULLSCREEN_DESKTOP) == 0)
-                            {
-                                window_is_fullscreen = true;
-                            }
-                            else
-                            {
-                                std::cerr << "Failed to enter fullscreen: " << SDL_GetError() << "\n";
-                            }
-                        }
-                        fullscreen_view = true;
-                        fullscreen_stream = context_stream_index;
-                        hovered_stream = fullscreen_stream;
-
-                        // Switch audio to the fullscreen stream
-                        if (context_stream_index != active_audio_stream.load() &&
-                            context_stream_index < stream_count &&
-                            streams[context_stream_index].fmt_ctx)
-                        {
-                            int prev_stream = active_audio_stream.load();
-                            AUDIO_LOG("Switching audio from stream " << prev_stream << " to stream " << context_stream_index);
-                            active_audio_stream.store(context_stream_index);
-                            if (!configure_audio(streams[context_stream_index]))
-                            {
-                                std::cerr << "Failed to configure audio for fullscreen stream\n";
-                            }
-                            else
-                            {
-                                audio_controls_last_interaction_time = std::chrono::steady_clock::now();
-                                // Show notification
-                                std::string to_name = (context_stream_index < static_cast<int>(stream_names.size()) && !stream_names[context_stream_index].empty())
-                                                          ? stream_names[context_stream_index]
-                                                          : ("Stream " + std::to_string(context_stream_index));
-                                audio_switch_notification = "Audio: " + to_name;
-                                audio_switch_notification_time = std::chrono::steady_clock::now();
-                            }
-                        }
-
-                        show_context_menu = false;
-                    }
-                }
-                else
-                {
-                    if (ImGui::MenuItem("Exit stream fullscreen"))
-                    {
-                        fullscreen_view = false;
-                        fullscreen_stream = -1;
-                        hovered_stream = -1;
-
-                        // Switch audio back to stream 0
-                        if (active_audio_stream.load() != 0 && stream_count > 0 && streams[0].fmt_ctx)
-                        {
-                            int prev_stream = active_audio_stream.load();
-                            AUDIO_LOG("Switching audio back to stream 0 from stream " << prev_stream);
-                            active_audio_stream.store(0);
-                            if (!configure_audio(streams[0]))
-                            {
-                                std::cerr << "Failed to reconfigure audio for stream 0\n";
-                            }
-                            else
-                            {
-                                audio_controls_last_interaction_time = std::chrono::steady_clock::now();
-                                // Show notification
-                                std::string to_name = (!stream_names.empty() && !stream_names[0].empty())
-                                                          ? stream_names[0]
-                                                          : "Stream 0";
-                                audio_switch_notification = "Audio: " + to_name;
-                                audio_switch_notification_time = std::chrono::steady_clock::now();
-                            }
-                        }
-
-                        show_context_menu = false;
-                    }
-                }
-                if (ImGui::MenuItem("Exit"))
-                {
-                    quit = true;
-                    show_context_menu = false;
-                }
-                ImGui::End();
-            }
-        }
-
-        if (show_metrics_window)
-        {
-            ImGui::ShowMetricsWindow(&show_metrics_window);
-        }
-
-        if (show_diagnostics_overlay)
-        {
-            ImGui::SetNextWindowBgAlpha(0.85f);
-            ImGui::SetNextWindowPos(ImVec2(20.0f, 20.0f), ImGuiCond_FirstUseEver);
-            if (ImGui::Begin("Diagnostics", &show_diagnostics_overlay,
-                             ImGuiWindowFlags_NoSavedSettings |
-                                 ImGuiWindowFlags_AlwaysAutoResize |
-                                 ImGuiWindowFlags_NoCollapse))
-            {
-                ImGuiIO &io = ImGui::GetIO();
-                ImGui::Text("FPS: %.1f", io.Framerate);
-                ImGui::Text("Frame time: %.2f ms", io.Framerate > 0.0f ? 1000.0f / io.Framerate : 0.0f);
-                ImGui::Text("Streams: %d", stream_count);
-                if (reload_all_requested)
-                {
-                    ImGui::TextUnformatted("Reload queue: all streams");
-                }
-                else if (reload_stream_requested >= 0)
-                {
-                    ImGui::Text("Reload queue: stream %d", reload_stream_requested);
-                }
-                else
-                {
-                    ImGui::TextUnformatted("Reload queue: idle");
-                }
-                ImGui::Separator();
-                for (int i = 0; i < stream_count; ++i)
-                {
-                    std::string stream_label = (i < static_cast<int>(stream_names.size()) && !stream_names[i].empty())
-                                                   ? stream_names[i]
-                                                   : ("Stream " + std::to_string(i));
-                    bool is_open = streams[i].fmt_ctx != nullptr;
-                    bool has_timestamp = stream_last_frame_times[i] != std::chrono::steady_clock::time_point{};
-                    double last_age = has_timestamp ? std::chrono::duration<double>(frame_now - stream_last_frame_times[i]).count() : 0.0;
-                    bool stalled = is_open && has_timestamp && last_age > stall_threshold_seconds;
-                    bool awaiting_retry = !is_open && stream_retry_deadlines[i] != std::chrono::steady_clock::time_point{};
-                    double retry_in = awaiting_retry ? std::chrono::duration<double>(stream_retry_deadlines[i] - frame_now).count() : 0.0;
-                    if (retry_in < 0.0)
-                        retry_in = 0.0;
-                    ImVec4 header_color = stalled ? ImVec4(0.90f, 0.35f, 0.20f, 1.0f)
-                                                  : (is_open ? ImVec4(0.25f, 0.80f, 0.25f, 1.0f)
-                                                             : (awaiting_retry ? ImVec4(0.95f, 0.75f, 0.25f, 1.0f)
-                                                                               : ImVec4(0.70f, 0.70f, 0.70f, 1.0f)));
-                    ImGui::TextColored(header_color, "%d: %s", i, stream_label.c_str());
-                    ImGui::Indent();
-                    if (is_open)
-                    {
-                        ImGui::Text("State: %s", stalled ? "stalled" : "active");
-                        if (has_timestamp)
-                        {
-                            ImGui::Text("Last frame: %.1f s ago", last_age);
-                        }
-                        else
-                        {
-                            ImGui::TextUnformatted("Last frame: pending");
-                        }
-                    }
-                    else
-                    {
-                        ImGui::Text("State: %s", awaiting_retry ? "waiting for retry" : "closed");
-                        if (awaiting_retry)
-                        {
-                            ImGui::Text("Retry in: %.1f s", retry_in);
-                        }
-                    }
-                    ImGui::Unindent();
-                    if (i + 1 < stream_count)
-                    {
-                        ImGui::Separator();
-                    }
-                }
-            }
-            ImGui::End();
-        }
-
-        for (int i = 0; i < stream_count; ++i)
-        {
-            if (i >= static_cast<int>(stream_last_frame_times.size()))
-            {
-                break;
-            }
-            if (!streams[i].fmt_ctx)
-            {
-                stream_stall_reported[i] = false;
-                continue;
-            }
-            auto last = stream_last_frame_times[i];
-            if (last == std::chrono::steady_clock::time_point{})
-            {
-                continue;
-            }
-            double age = std::chrono::duration<double>(frame_now - last).count();
-            if (age > stall_threshold_seconds)
-            {
-                if (!stream_stall_reported[i])
-                {
-                    std::string stream_label = (i < static_cast<int>(stream_names.size()) && !stream_names[i].empty())
-                                                   ? stream_names[i]
-                                                   : ("Stream " + std::to_string(i));
-                    std::ostringstream oss;
-                    oss << std::fixed << std::setprecision(1) << age;
-#ifdef DEBUG_LOGGING
-                    std::cerr << "[diag] Stream \"" << stream_label << "\" stalled for " << oss.str() << "s\n";
-#endif
-                    stream_stall_reported[i] = true;
-                }
-            }
-            else if (stream_stall_reported[i])
-            {
-                std::string stream_label = (i < static_cast<int>(stream_names.size()) && !stream_names[i].empty())
-                                               ? stream_names[i]
-                                               : ("Stream " + std::to_string(i));
-                std::ostringstream oss;
-                oss << std::fixed << std::setprecision(1) << age;
-#ifdef DEBUG_LOGGING
-                std::cerr << "[diag] Stream \"" << stream_label << "\" recovered (" << oss.str() << "s since last frame)\n";
-#endif
-                stream_stall_reported[i] = false;
-            }
-        }
-
-        std::vector<int> overlay_targets;
-        overlay_targets.reserve(stream_count);
-        auto add_overlay_target = [&](int idx)
-        {
-            if (idx < 0 || idx >= stream_count)
-                return;
-            if (std::find(overlay_targets.begin(), overlay_targets.end(), idx) == overlay_targets.end())
-            {
-                overlay_targets.push_back(idx);
-            }
-        };
-
-        if (overlay_always_show_all)
-        {
-            for (int i = 0; i < stream_count; ++i)
-                add_overlay_target(i);
-        }
-        else
-        {
-            for (int i = 0; i < stream_count; ++i)
-            {
-                if (overlay_always_show_stream[i])
-                    add_overlay_target(i);
-            }
-        }
-        add_overlay_target(effective_hovered_stream);
-
-        if (!overlay_targets.empty())
-        {
-            int out_w = 0;
-            int out_h = 0;
-            if (SDL_GetRendererOutputSize(renderer, &out_w, &out_h) == 0 && out_w > 0 && out_h > 0)
-            {
-                for (int idx : overlay_targets)
-                {
-                    ImVec2 overlay_pos;
-                    if (fullscreen_view && fullscreen_stream == idx)
-                    {
-                        overlay_pos = ImVec2(20.0f, 20.0f);
-                    }
-                    else if (!fullscreen_view)
-                    {
-                        int cell_w = out_w / GRID_COLS;
-                        int cell_h = out_h / GRID_ROWS;
-                        int col = idx % GRID_COLS;
-                        int row = idx / GRID_COLS;
-                        overlay_pos = ImVec2(static_cast<float>(col * cell_w + 12),
-                                             static_cast<float>(row * cell_h + 12));
-                    }
-                    else
-                    {
-                        continue;
-                    }
-
-                    std::string window_name = "##overlay" + std::to_string(idx);
-                    ImGui::SetNextWindowPos(overlay_pos, ImGuiCond_Always);
-                    ImGui::SetNextWindowBgAlpha(0.75f);
-                    ImGuiWindowFlags overlay_flags = ImGuiWindowFlags_NoDecoration |
-                                                     ImGuiWindowFlags_AlwaysAutoResize |
-                                                     ImGuiWindowFlags_NoMove |
-                                                     ImGuiWindowFlags_NoSavedSettings |
-                                                     ImGuiWindowFlags_NoInputs;
-                    if (ImGui::Begin(window_name.c_str(), nullptr, overlay_flags))
-                    {
-                        if (idx >= 0 && idx < static_cast<int>(stream_names.size()))
-                        {
-                            ImGui::TextUnformatted(stream_names[idx].c_str());
-                        }
-                    }
-                    ImGui::End();
-                }
-            }
-        }
-
-        configuration_panel.render(show_configuration_panel);
-        configuration_panel.renderRTSPConfigPopup();
-
-        // Render unavailable stream status overlays
-        {
-            int out_w = 0;
-            int out_h = 0;
-            if (SDL_GetRendererOutputSize(renderer, &out_w, &out_h) == 0 && out_w > 0 && out_h > 0)
-            {
-                for (int i = 0; i < stream_count; ++i)
-                {
-                    // Show status message for streams that are not connected
-                    if (!streams[i].fmt_ctx && !fullscreen_view)
-                    {
-                        int cell_w = out_w / GRID_COLS;
-                        int cell_h = out_h / GRID_ROWS;
-                        int col = i % GRID_COLS;
-                        int row = i / GRID_COLS;
-
-                        // Center the status message in the cell
-                        ImVec2 cell_center = ImVec2(
-                            static_cast<float>(col * cell_w + cell_w / 2),
-                            static_cast<float>(row * cell_h + cell_h / 2));
-
-                        std::string status_window_name = "##status" + std::to_string(i);
-                        ImGui::SetNextWindowPos(cell_center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-                        ImGui::SetNextWindowBgAlpha(0.85f);
-                        ImGuiWindowFlags status_flags = ImGuiWindowFlags_NoDecoration |
-                                                        ImGuiWindowFlags_AlwaysAutoResize |
-                                                        ImGuiWindowFlags_NoMove |
-                                                        ImGuiWindowFlags_NoSavedSettings |
-                                                        ImGuiWindowFlags_NoInputs;
-
-                        if (ImGui::Begin(status_window_name.c_str(), nullptr, status_flags))
-                        {
-                            std::string stream_label = (i < static_cast<int>(stream_names.size()) && !stream_names[i].empty())
-                                                           ? stream_names[i]
-                                                           : ("Stream " + std::to_string(i));
-                            ImGui::TextUnformatted(stream_label.c_str());
-                            ImGui::Separator();
-                            ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "Not available");
-
-                            // Show retry countdown if scheduled
-                            if (i < static_cast<int>(stream_retry_deadlines.size()) &&
-                                stream_retry_deadlines[i] != std::chrono::steady_clock::time_point{})
-                            {
-                                auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                    stream_retry_deadlines[i] - frame_now);
-                                if (remaining.count() > 0)
-                                {
-                                    float seconds = remaining.count() / 1000.0f;
-                                    ImGui::Text("Retry in %.1fs", seconds);
-                                }
-                                else
-                                {
-                                    ImGui::TextUnformatted("Reconnecting...");
-                                }
-                            }
-                        }
-                        ImGui::End();
-                    }
-                }
-            }
-        }
-
-        // Render audio controls overlay (only when the active stream actually has audio).
-        {
-            const int audio_stream_idx = active_audio_stream.load();
-            const bool audio_active = audio_stream_idx >= 0 && audio_stream_idx < stream_count &&
-                                      streams[audio_stream_idx].fmt_ctx &&
-                                      streams[audio_stream_idx].audio_stream_index != -1 &&
-                                      audio_device_open;
-
-            const bool show_audio_controls = audio_active &&
-                                             (effective_hovered_stream == audio_stream_idx ||
-                                              (frame_now - audio_controls_last_interaction_time) < kOverlayAutoHideDuration);
-
-            if (show_audio_controls)
-            {
-                int out_w = 0;
-                int out_h = 0;
-                if (SDL_GetRendererOutputSize(renderer, &out_w, &out_h) == 0 && out_w > 0 && out_h > 0)
-                {
-                    ImVec2 overlay_pos;
-                    if (fullscreen_view && fullscreen_stream == audio_stream_idx)
-                    {
-                        overlay_pos = ImVec2(20.0f, 20.0f);
-                    }
-                    else if (!fullscreen_view)
-                    {
-                        int cell_w = out_w / GRID_COLS;
-                        int cell_h = out_h / GRID_ROWS;
-                        int col = audio_stream_idx % GRID_COLS;
-                        int row = audio_stream_idx / GRID_COLS;
-                        overlay_pos = ImVec2(static_cast<float>(col * cell_w + 12),
-                                             static_cast<float>(row * cell_h + 44));
-                    }
-                    else
-                    {
-                        overlay_pos = ImVec2(20.0f, 20.0f);
-                    }
-
-                    ImGui::SetNextWindowPos(overlay_pos, ImGuiCond_Always);
-                    ImGui::SetNextWindowBgAlpha(0.80f);
-                    ImGuiWindowFlags audio_overlay_flags = ImGuiWindowFlags_NoDecoration |
-                                                           ImGuiWindowFlags_AlwaysAutoResize |
-                                                           ImGuiWindowFlags_NoMove |
-                                                           ImGuiWindowFlags_NoSavedSettings;
-
-                    if (ImGui::Begin("##audio_controls", nullptr, audio_overlay_flags))
-                    {
-                        if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem))
-                        {
-                            audio_controls_last_interaction_time = frame_now;
-                        }
-
-                        std::string active_name = (audio_stream_idx < static_cast<int>(stream_names.size()) && !stream_names[audio_stream_idx].empty())
-                                                      ? stream_names[audio_stream_idx]
-                                                      : ("Stream " + std::to_string(audio_stream_idx));
-                        ImGui::Text("Audio: %s", active_name.c_str());
-
-                        bool muted = audio_data.muted.load(std::memory_order_relaxed);
-                        if (ImGui::Checkbox("Mute", &muted))
-                        {
-                            audio_data.muted.store(muted, std::memory_order_relaxed);
-                            audio_controls_last_interaction_time = frame_now;
-                        }
-
-                        int volume = audio_data.volume_percent.load(std::memory_order_relaxed);
-                        if (ImGui::SliderInt("Volume", &volume, 0, 100))
-                        {
-                            volume = std::clamp(volume, 0, 100);
-                            audio_data.volume_percent.store(volume, std::memory_order_relaxed);
-                            audio_controls_last_interaction_time = frame_now;
-                        }
-                    }
-                    ImGui::End();
-                }
-            }
-        }
-
-        // Render audio switch notification
-        if (!audio_switch_notification.empty())
-        {
-            auto now = std::chrono::steady_clock::now();
-            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - audio_switch_notification_time);
-
-            if (elapsed < kNotificationDisplayDuration)
-            {
-                float alpha = 1.0f;
-
-                // Fade in
-                if (elapsed < kNotificationFadeInDuration)
-                {
-                    alpha = static_cast<float>(elapsed.count()) / static_cast<float>(kNotificationFadeInDuration.count());
-                }
-                // Fade out
-                else if (elapsed > kNotificationDisplayDuration - kNotificationFadeOutDuration)
-                {
-                    auto fade_time = elapsed - (kNotificationDisplayDuration - kNotificationFadeOutDuration);
-                    alpha = 1.0f - (static_cast<float>(fade_time.count()) / static_cast<float>(kNotificationFadeOutDuration.count()));
-                }
-
-                alpha = std::max(0.0f, std::min(1.0f, alpha));
-
-                int out_w = 0;
-                int out_h = 0;
-                if (SDL_GetRendererOutputSize(renderer, &out_w, &out_h) == 0 && out_w > 0 && out_h > 0)
-                {
-                    ImGui::SetNextWindowPos(ImVec2(out_w * 0.5f, out_h * 0.1f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-                    ImGui::SetNextWindowBgAlpha(0.85f * alpha);
-                    ImGuiWindowFlags notification_flags = ImGuiWindowFlags_NoDecoration |
-                                                          ImGuiWindowFlags_AlwaysAutoResize |
-                                                          ImGuiWindowFlags_NoMove |
-                                                          ImGuiWindowFlags_NoSavedSettings |
-                                                          ImGuiWindowFlags_NoInputs |
-                                                          ImGuiWindowFlags_NoFocusOnAppearing;
-
-                    if (ImGui::Begin("##audio_notification", nullptr, notification_flags))
-                    {
-                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 1.0f, alpha));
-                        ImGui::TextUnformatted(audio_switch_notification.c_str());
-                        ImGui::PopStyleColor();
-                    }
-                    ImGui::End();
-                }
-            }
-            else
-            {
-                audio_switch_notification.clear();
-            }
-        }
-
-        if (quit)
-        {
-#ifdef DEBUG_LOGGING
-            std::cerr << "[diag] quit set before reload checks" << "\n";
-#endif
-        }
-
-        // Handle camera removal
-        if (remove_camera_requested >= 0 && remove_camera_requested < stream_count)
-        {
-            int idx = remove_camera_requested;
-            std::string camera_name = stream_configs[idx].name;
-            bool via_server = stream_configs[idx].via_server;
-
-            GRID_LOG("REMOVE CAMERA: idx=" << idx << ", name=" << camera_name << ", stream_count=" << stream_count << ", streams.size()=" << streams.size());
-
-            // Release the stream to stop workers cleanly
-            release_stream(streams[idx]);
-            clear_canvas_slot(idx);
-
-            // Cancel any pending retry
-            {
-                std::lock_guard<std::mutex> lock(stream_state_mutex);
-                if (idx < static_cast<int>(stream_retry_deadlines.size()))
-                {
-                    stream_retry_deadlines[idx] = std::chrono::steady_clock::time_point{};
-                }
-            }
-
-            // Remove from configuration vectors (stream_configs must be updated before reload)
-            stream_configs.erase(stream_configs.begin() + idx);
-            stream_urls.erase(stream_urls.begin() + idx);
-            stream_names.erase(stream_names.begin() + idx);
-            overlay_always_show_stream.erase(overlay_always_show_stream.begin() + idx);
-            stream_retry_deadlines.erase(stream_retry_deadlines.begin() + idx);
-            stream_last_frame_times.erase(stream_last_frame_times.begin() + idx);
-            stream_stall_reported.erase(stream_stall_reported.begin() + idx);
-
-            // Update stream count before reload
-            stream_count = static_cast<int>(stream_configs.size());
-
-            GRID_LOG("After removal: stream_count=" << stream_count << ", stream_configs.size()=" << stream_configs.size());
-
-            // Persist config immediately so reload uses correct data
-            persist_config();
-
-            // Notify server asynchronously (non-blocking, won't crash if server down)
-            if (via_server)
-            {
-                async_network_worker.enqueueTask([camera_name, endpoint = client_config.server_endpoint]()
-                                                 {
-                    bool success = client_network::remove_camera(endpoint, camera_name);
-                    if (!success)
-                    {
-                        std::cerr << "Failed to remove camera from server: " << camera_name << "\n";
-                    } });
-            }
-
-            std::cerr << "Camera removed: " << camera_name << " (was index " << idx << ")\n";
-
-            // Schedule a full reload to properly rebuild streams deque
-            // This is necessary because VideoStreamCtx can't be moved/copied
-            reload_all_requested = true;
-            remove_camera_requested = -1;
-        }
-
-        if (reload_stream_requested < 0)
-        {
-            for (int i = 0; i < stream_count; ++i)
-            {
-                if (streams[i].fmt_ctx)
-                {
-                    continue;
-                }
-                if (stream_retry_deadlines[i] != std::chrono::steady_clock::time_point{} && frame_now >= stream_retry_deadlines[i])
-                {
-                    reload_stream_requested = i;
-                    stream_retry_deadlines[i] = std::chrono::steady_clock::time_point{};
-                    break;
-                }
-            }
-        }
-
-        if (reload_all_requested || reload_stream_requested >= 0)
-        {
-            bool need_audio_reset = reload_all_requested || reload_stream_requested == 0;
-            if (need_audio_reset && audio_device_open)
-            {
-                SDL_PauseAudio(1);
-            }
-
-            if (reload_all_requested)
-            {
-                GRID_LOG("RELOAD ALL: stream_count=" << stream_count << ", streams.size()=" << streams.size());
-
-                std::fill(canvas_buffer.begin(), canvas_buffer.end(), 0);
-
-                // Release all existing streams (this will wait for workers to finish)
-                GRID_LOG("Releasing " << streams.size() << " existing streams...");
-                for (auto &stream : streams)
-                {
-                    release_stream(stream);
-                }
-
-                // Reinitialize streams deque to match the new stream_count
-                streams.clear();
-                streams.resize(stream_count);
-                GRID_LOG("Streams deque resized to: " << stream_count);
-
-                bool stream0_reopened = false;
-                std::vector<int> streams_to_restart;
-                streams_to_restart.reserve(stream_count);
-                for (int i = 0; i < stream_count; ++i)
-                {
-                    GRID_LOG("Reloading stream " << i << ": " << stream_urls[i]);
-                    if (!open_stream(i, stream_urls[i], i == 0))
-                    {
-                        std::cerr << "Failed to reload stream: " << stream_urls[i] << "\n";
-                        schedule_stream_retry(i, kStreamRetryInitialDelay);
-                        GRID_LOG("Stream " << i << " failed, scheduled for retry");
-                        continue; // Don't break - try to open remaining streams
-                    }
-                    record_stream_open(i);
-                    if (ensure_canvas_dimensions && streams[i].vctx)
-                    {
-                        GRID_LOG("Stream " << i << " dimensions: " << streams[i].vctx->width << "x" << streams[i].vctx->height);
-                        if (!ensure_canvas_dimensions(streams[i].vctx->width, streams[i].vctx->height, placeholder_dimensions))
-                        {
-                            std::cerr << "Failed to resize canvas during reload (all)." << "\n";
-                        }
-                        else
-                        {
-                            GRID_LOG("Canvas resized: " << canvas_w << "x" << canvas_h << " (cell: " << single_w << "x" << single_h << ")");
-                        }
-                    }
-                    streams_to_restart.push_back(i);
-                    if (i == 0)
-                    {
-                        stream0_reopened = true;
-                    }
-                }
-
-                if (stream_count == 0)
-                {
-                    placeholder_dimensions = true;
-                    GRID_LOG("No streams remaining, using placeholder dimensions");
-                }
-
-                GRID_LOG("Reload complete: stream_count=" << stream_count << ", streams_to_restart.size()=" << streams_to_restart.size());
-
-                if (need_audio_reset && stream0_reopened && stream_count > 0)
-                {
-                    if (!configure_audio(streams[0]))
-                    {
-                        std::cerr << "Failed to reconfigure audio\n";
-                    }
-                }
-                for (int idx : streams_to_restart)
-                {
-                    start_stream_worker(idx);
-                }
-            }
-            else if (reload_stream_requested >= 0 && reload_stream_requested < stream_count)
-            {
-                int idx = reload_stream_requested;
-                
-                // Stop worker thread and release stream resources before reloading
-                VideoStreamCtx& stream = streams[idx];
-                if (stream.worker.joinable())
-                {
-                    stream.worker_stop.store(true);
-                    stream.worker.join();
-                }
-                release_stream(stream);
-                
-                clear_canvas_slot(idx);
-
-                // Use async_open_stream to avoid blocking the main thread during reconnection
-                async_open_stream(idx, stream_urls[idx], idx == 0);
-            }
-
-            if (need_audio_reset && audio_device_open)
-            {
-                SDL_PauseAudio(0);
-            }
-
-            reload_all_requested = false;
-            reload_stream_requested = -1;
-        }
-
-        if (texture && !canvas_buffer.empty() && canvas_linesize[0] > 0)
-        {
-            auto upload_start = std::chrono::steady_clock::now();
-            SDL_UpdateTexture(texture, nullptr, canvas_buffer.data(), canvas_linesize[0]);
-            auto upload_end = std::chrono::steady_clock::now();
-            auto upload_ms = std::chrono::duration_cast<std::chrono::milliseconds>(upload_end - upload_start).count();
-
-            PERF_LOG("Texture upload: " << upload_ms << "ms (canvas: " << canvas_w << "x" << canvas_h << ")" << (upload_ms > 5 ? " (SLOW!)" : ""));
-        }
-
-        SDL_RenderClear(renderer);
-        if (fullscreen_view && fullscreen_stream >= 0 && fullscreen_stream < stream_count)
-        {
-            int out_w = 0;
-            int out_h = 0;
-            if (SDL_GetRendererOutputSize(renderer, &out_w, &out_h) == 0 && out_w > 0 && out_h > 0)
-            {
-                SDL_Rect src{
-                    (fullscreen_stream % GRID_COLS) * single_w,
-                    (fullscreen_stream / GRID_COLS) * single_h,
-                    single_w,
-                    single_h};
-                SDL_Rect dst{0, 0, out_w, out_h};
-                SDL_RenderCopy(renderer, texture, &src, &dst);
-            }
-            else
-            {
-                SDL_RenderCopy(renderer, texture, nullptr, nullptr);
-            }
-        }
-        else
-        {
-            SDL_RenderCopy(renderer, texture, nullptr, nullptr);
-
-            if (effective_hovered_stream >= 0)
-            {
-                int out_w = 0;
-                int out_h = 0;
-                if (SDL_GetRendererOutputSize(renderer, &out_w, &out_h) == 0 && out_w > 0 && out_h > 0)
-                {
-                    int cell_w = out_w / GRID_COLS;
-                    int cell_h = out_h / GRID_ROWS;
-                    SDL_Rect overlay{
-                        (effective_hovered_stream % GRID_COLS) * cell_w,
-                        (effective_hovered_stream / GRID_COLS) * cell_h,
-                        cell_w,
-                        cell_h};
-                    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-                    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 96);
-                    SDL_RenderFillRect(renderer, &overlay);
-                    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
-                }
-            }
-        }
-
-        ImGui::Render();
-        ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), renderer);
-
-        SDL_RenderPresent(renderer);
-
-        SDL_Delay(1);
-
-#ifdef DEBUG_LOGGING
-        std::cerr << "[diag] end of iteration quit flag: " << quit << "\n";
-#endif
+    int fill_ret =
+        av_image_fill_arrays(rgb_frame->data, rgb_frame->linesize, rgb_buffer,
+                             AV_PIX_FMT_RGB24, frame->width, frame->height, 32);
+    if (fill_ret < 0) {
+      av_frame_free(&rgb_frame);
+      av_free(rgb_buffer);
+      sws_freeContext(sws_ctx);
+      av_packet_free(&pkt);
+      av_frame_free(&frame);
+      avcodec_free_context(&codec_ctx);
+      return false;
     }
 
-    if (audio_device_open)
-    {
-        SDL_CloseAudio();
-        audio_device_open = false;
-    }
-    if (swr)
-    {
-        swr_free(&swr);
-        swr = nullptr;
-    }
+    sws_scale(sws_ctx, frame->data, frame->linesize, 0, frame->height,
+              rgb_frame->data, rgb_frame->linesize);
 
-    for (auto &stream : streams)
-    {
-        release_stream(stream);
-    }
-
-    ImGui_ImplSDLRenderer2_Shutdown();
-    ImGui_ImplSDL2_Shutdown();
-    ImGui::DestroyContext();
-
-    if (texture)
-    {
-        SDL_DestroyTexture(texture);
-        texture = nullptr;
-    }
-    if (motion_frame_texture)
-    {
+    // Check if texture needs to be recreated (different dimensions)
+    MOTION_FRAME_LOG("Decoded frame size: " << frame->width << "x"
+                                            << frame->height);
+    if (motion_frame_texture) {
+      int existing_w = 0, existing_h = 0;
+      SDL_QueryTexture(motion_frame_texture, nullptr, nullptr, &existing_w,
+                       &existing_h);
+      if (existing_w != frame->width || existing_h != frame->height) {
+        MOTION_FRAME_LOG("Destroying old texture (dimension change)");
         SDL_DestroyTexture(motion_frame_texture);
         motion_frame_texture = nullptr;
-    }
-    if (renderer)
-    {
-        SDL_DestroyRenderer(renderer);
-        renderer = nullptr;
-    }
-    if (win)
-    {
-        SDL_DestroyWindow(win);
-        win = nullptr;
+      }
     }
 
-    SDL_Quit();
-    avformat_network_deinit();
+    // Create SDL texture if needed
+    if (!motion_frame_texture) {
+      MOTION_FRAME_LOG("Creating new SDL texture: " << frame->width << "x"
+                                                    << frame->height);
+      motion_frame_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGB24,
+                                               SDL_TEXTUREACCESS_STATIC,
+                                               frame->width, frame->height);
+    }
 
-    return 0;
+    bool success = false;
+    if (motion_frame_texture) {
+      MOTION_FRAME_LOG("Updating SDL texture with RGB data...");
+      int update_ret = SDL_UpdateTexture(motion_frame_texture, nullptr,
+                                         rgb_buffer, rgb_frame->linesize[0]);
+      if (update_ret == 0) {
+        texture_out = motion_frame_texture;
+        width_out = frame->width;
+        height_out = frame->height;
+        success = true;
+        MOTION_FRAME_LOG("SUCCESS: Texture updated successfully");
+      } else {
+        MOTION_FRAME_LOG("ERROR: SDL_UpdateTexture failed: " << SDL_GetError());
+        SDL_DestroyTexture(motion_frame_texture);
+        motion_frame_texture = nullptr;
+      }
+    } else {
+      MOTION_FRAME_LOG("ERROR: Failed to create SDL texture");
+    }
+
+    MOTION_FRAME_LOG("Cleaning up FFmpeg resources");
+    av_free(rgb_buffer);
+    av_frame_free(&rgb_frame);
+    sws_freeContext(sws_ctx);
+    av_packet_free(&pkt);
+    av_frame_free(&frame);
+    avcodec_free_context(&codec_ctx);
+
+    MOTION_FRAME_LOG(
+        "Callback complete, success=" << (success ? "true" : "false"));
+    return success;
+  };
+
+  auto add_motion_region_callback = [&](const std::string &camera_name, int x,
+                                        int y, int w, int h,
+                                        float angle) -> int {
+    return client_network::add_motion_region(client_config.server_endpoint,
+                                             camera_name, x, y, w, h, angle);
+  };
+
+  auto remove_motion_region_callback = [&](const std::string &camera_name,
+                                           int region_id) -> bool {
+    return client_network::remove_motion_region(client_config.server_endpoint,
+                                                camera_name, region_id);
+  };
+
+  auto clear_motion_regions_callback =
+      [&](const std::string &camera_name) -> bool {
+    return client_network::clear_motion_regions(client_config.server_endpoint,
+                                                camera_name);
+  };
+
+  auto get_motion_regions_callback = [&](const std::string &camera_name)
+      -> std::vector<ConfigurationPanel::MotionRegion> {
+    return client_network::get_motion_regions(client_config.server_endpoint,
+                                              camera_name);
+  };
+
+  // Create async network worker for non-blocking network operations
+  AsyncNetworkWorker async_network_worker;
+
+  auto probe_stream_handler = [&](const std::string &url) -> ProbeStreamResult {
+    GRID_LOG("PROBE STREAM: " << url);
+    auto probe = probe_rtsp_stream(url);
+
+    ProbeStreamResult result;
+    result.success = probe.success;
+    result.width = probe.width;
+    result.height = probe.height;
+    result.has_audio = probe.has_audio;
+    result.error_message = probe.error_message;
+
+    if (result.success) {
+      std::cout << "Probe successful: " << result.width << "x" << result.height
+                << ", audio=" << (result.has_audio ? "yes" : "no") << "\n";
+      GRID_LOG("PROBE SUCCESS: " << result.width << "x" << result.height
+                                 << ", audio=" << result.has_audio);
+    } else {
+      std::cerr << "Probe failed: " << result.error_message << "\n";
+      GRID_LOG("PROBE FAILED: " << result.error_message);
+    }
+
+    return result;
+  };
+
+  ConfigurationPanel configuration_panel(
+      window_settings, persist_window_settings, add_camera_handler,
+      probe_stream_handler, client_config.server_endpoint, nullptr,
+      show_metrics_callback, get_cameras_callback, toggle_motion_callback,
+      fetch_motion_frame_callback, add_motion_region_callback,
+      remove_motion_region_callback, clear_motion_regions_callback,
+      get_motion_regions_callback);
+
+  // Set pointer for lambdas to access
+  configuration_panel_ptr = &configuration_panel;
+
+  // Connect async worker to configuration panel
+  configuration_panel.setAsyncWorker(&async_network_worker);
+
+  constexpr int kStartupRetryAttempts = 3;
+  constexpr std::chrono::milliseconds kStartupRetryDelay{1000};
+
+  for (int i = 0; i < stream_count; ++i) {
+    GRID_LOG("Opening stream " << i << " (" << stream_names[i]
+                               << "): " << stream_urls[i]);
+    bool opened = false;
+    for (int attempt = 0; attempt < kStartupRetryAttempts && !opened;
+         ++attempt) {
+      if (attempt > 0) {
+        std::cerr << "Retrying stream " << i << " (" << stream_names[i]
+                  << "), attempt " << (attempt + 1) << "/"
+                  << kStartupRetryAttempts << "...\n";
+        std::this_thread::sleep_for(kStartupRetryDelay);
+      }
+      opened = open_stream(i, stream_urls[i], i == 0);
+    }
+
+    if (opened) {
+      record_stream_open(i);
+      GRID_LOG("Stream " << i << " opened successfully");
+    } else {
+      std::cerr << "Stream " << i << " (" << stream_names[i]
+                << ") not available after " << kStartupRetryAttempts
+                << " attempts. Will retry periodically.\n";
+      release_stream(streams[i]);
+      schedule_stream_retry(i, kStreamRetryInitialDelay);
+      GRID_LOG("Stream " << i << " failed to open, scheduled for retry");
+    }
+  }
+
+  GRID_LOG("After startup: stream_count=" << stream_count << ", streams.size()="
+                                          << streams.size());
+
+  if (!reference_dimensions_ready) {
+    single_w = kDefaultCellWidth;
+    single_h = kDefaultCellHeight;
+    placeholder_dimensions = true;
+  }
+
+  if (stream_count > 0) {
+    VideoStreamCtx &audio_src = streams[0];
+    if (!configure_audio(audio_src)) {
+      return 6;
+    }
+  }
+
+  for (int i = 0; i < stream_count; ++i) {
+    start_stream_worker(i);
+  }
+
+  // --- SDL Video: one big canvas ---
+  canvas_w = std::max(single_w, 1) * GRID_COLS;
+  canvas_h = std::max(single_h, 1) * GRID_ROWS;
+
+  GRID_LOG("Canvas dimensions: "
+           << canvas_w << "x" << canvas_h << " (cell: " << single_w << "x"
+           << single_h << ", placeholder=" << placeholder_dimensions << ")");
+
+  win = SDL_CreateWindow("RTSP Grid Player", SDL_WINDOWPOS_CENTERED,
+                         SDL_WINDOWPOS_CENTERED, canvas_w, canvas_h,
+                         SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
+  if (!win) {
+    std::cerr << "Failed to create SDL window: " << SDL_GetError() << "\n";
+    return 1;
+  }
+  renderer = SDL_CreateRenderer(
+      win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+  if (!renderer) {
+    std::cerr << "Failed to create SDL renderer: " << SDL_GetError() << "\n";
+    return 1;
+  }
+
+  // Check if hardware acceleration is actually being used
+  SDL_RendererInfo renderer_info;
+  if (SDL_GetRendererInfo(renderer, &renderer_info) == 0) {
+    PERF_LOG("SDL Renderer: " << renderer_info.name);
+    PERF_LOG(
+        "  Hardware accelerated: "
+        << ((renderer_info.flags & SDL_RENDERER_ACCELERATED) ? "YES" : "NO"));
+    PERF_LOG("  Software fallback: "
+             << ((renderer_info.flags & SDL_RENDERER_SOFTWARE) ? "YES" : "NO"));
+    PERF_LOG("  VSync: " << ((renderer_info.flags & SDL_RENDERER_PRESENTVSYNC)
+                                 ? "YES"
+                                 : "NO"));
+    PERF_LOG("  Max texture size: " << renderer_info.max_texture_width << "x"
+                                    << renderer_info.max_texture_height);
+  }
+
+  auto adjust_window_to_canvas = [&](bool allow_maximize) {
+    if (!win) {
+      return;
+    }
+
+    if (allow_maximize) {
+      SDL_RestoreWindow(win);
+    }
+
+    int display_index = SDL_GetWindowDisplayIndex(win);
+    SDL_Rect usable_bounds{};
+    if (display_index >= 0 &&
+        SDL_GetDisplayUsableBounds(display_index, &usable_bounds) == 0) {
+      int target_w = std::min(canvas_w, usable_bounds.w);
+      int target_h = std::min(canvas_h, usable_bounds.h);
+      SDL_SetWindowSize(win, target_w, target_h);
+      if (allow_maximize &&
+          (canvas_w >= usable_bounds.w || canvas_h >= usable_bounds.h)) {
+        SDL_MaximizeWindow(win);
+      }
+    } else {
+      SDL_SetWindowSize(win, canvas_w, canvas_h);
+    }
+  };
+
+  ensure_canvas_dimensions = [&](int desired_single_w, int desired_single_h,
+                                 bool force) -> bool {
+    if (!renderer || !win) {
+      return false;
+    }
+
+    desired_single_w = std::max(desired_single_w, 1);
+    desired_single_h = std::max(desired_single_h, 1);
+
+    int target_canvas_w = desired_single_w * GRID_COLS;
+    int target_canvas_h = desired_single_h * GRID_ROWS;
+
+    // Don't skip resize if we're not forcing and dimensions match - we still
+    // need to ensure the canvas buffer is properly allocated for the current
+    // stream count
+    if (!force && desired_single_w == single_w &&
+        desired_single_h == single_h && texture &&
+        canvas_w == target_canvas_w && canvas_h == target_canvas_h &&
+        !canvas_buffer.empty() && canvas_linesize[0] > 0) {
+      // Verify canvas buffer is actually valid before returning early
+      int expected_bytes =
+          av_image_get_buffer_size(AV_PIX_FMT_RGB24, canvas_w, canvas_h, 1);
+      if (static_cast<int>(canvas_buffer.size()) == expected_bytes) {
+        return true;
+      }
+      GRID_LOG("Canvas buffer size mismatch, forcing resize");
+    }
+
+    single_w = desired_single_w;
+    single_h = desired_single_h;
+    canvas_w = target_canvas_w;
+    canvas_h = target_canvas_h;
+
+    GRID_LOG("Resizing canvas to: " << canvas_w << "x" << canvas_h << " (cell: "
+                                    << single_w << "x" << single_h << ")");
+
+    int bytes =
+        av_image_get_buffer_size(AV_PIX_FMT_RGB24, canvas_w, canvas_h, 1);
+    if (bytes <= 0) {
+      std::cerr << "Invalid canvas dimensions requested (" << canvas_w << "x"
+                << canvas_h << ")." << "\n";
+      return false;
+    }
+
+    canvas_buffer.assign(static_cast<size_t>(bytes), 0);
+    canvas_data[0] = canvas_buffer.data();
+    canvas_data[1] = nullptr;
+    canvas_data[2] = nullptr;
+    canvas_data[3] = nullptr;
+    av_image_fill_linesizes(canvas_linesize, AV_PIX_FMT_RGB24, canvas_w);
+
+    if (texture) {
+      SDL_DestroyTexture(texture);
+      texture = nullptr;
+    }
+    texture =
+        SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGB24,
+                          SDL_TEXTUREACCESS_STREAMING, canvas_w, canvas_h);
+    if (!texture) {
+      std::cerr << "Failed to create canvas texture: " << SDL_GetError()
+                << "\n";
+      return false;
+    }
+
+    std::fill(canvas_buffer.begin(), canvas_buffer.end(), 0);
+    adjust_window_to_canvas(force);
+    placeholder_dimensions = false;
+
+    GRID_LOG("Canvas resize complete: " << canvas_w << "x" << canvas_h);
+    return true;
+  };
+
+  if (!ensure_canvas_dimensions(single_w, single_h, true)) {
+    std::cerr << "Failed to initialise canvas dimensions." << "\n";
+    return 1;
+  }
+
+  // --- Dear ImGui setup for a primitive context menu ---
+  IMGUI_CHECKVERSION();
+  ImGui::CreateContext();
+  ImGui::StyleColorsDark();
+  ImGui_ImplSDL2_InitForSDLRenderer(win, renderer);
+  ImGui_ImplSDLRenderer2_Init(renderer);
+
+  bool show_context_menu = false;
+  bool menu_hovered = false;
+  ImVec2 context_menu_pos = ImVec2(0.0f, 0.0f);
+  int context_stream_index = -1;
+  int hovered_stream = -1;
+  bool reload_all_requested = false;
+  int reload_stream_requested = -1;
+  int remove_camera_requested = -1;
+
+  // Setup RTSP configuration callbacks (must be after reload_stream_requested
+  // declaration)
+  auto get_rtsp_config = [&](int stream_index) -> CameraConfig & {
+    return stream_configs[stream_index];
+  };
+
+  auto save_rtsp_config = [&]() {
+    sync_json_from_client_config(client_config_json, client_config);
+    try {
+      save_client_config(client_config_json, config_path);
+    } catch (const std::exception &err) {
+      std::cerr << "Warning: failed to save RTSP config: " << err.what()
+                << "\n";
+    }
+  };
+
+  auto reload_stream = [&](int stream_index) {
+    if (stream_index >= 0 && stream_index < stream_count) {
+      std::cerr << "Reloading stream " << stream_index << " ("
+                << stream_names[stream_index] << ") with new RTSP config...\n";
+      reload_stream_requested = stream_index;
+    }
+  };
+
+  configuration_panel.setRTSPConfigCallbacks(get_rtsp_config, save_rtsp_config,
+                                             reload_stream);
+
+  bool fullscreen_view = false;
+  bool window_is_fullscreen = false;
+  int fullscreen_stream = -1;
+  bool overlay_always_show_all = false;
+  bool show_configuration_panel = false;
+  bool show_diagnostics_overlay = false;
+
+  auto stream_index_from_point = [&](int px, int py) -> int {
+    if (fullscreen_view && fullscreen_stream >= 0 &&
+        fullscreen_stream < stream_count) {
+      return fullscreen_stream;
+    }
+    int out_w = 0;
+    int out_h = 0;
+    if (SDL_GetRendererOutputSize(renderer, &out_w, &out_h) != 0 ||
+        out_w == 0 || out_h == 0) {
+      return -1;
+    }
+    int cell_w = out_w / GRID_COLS;
+    int cell_h = out_h / GRID_ROWS;
+    if (cell_w <= 0 || cell_h <= 0) {
+      return -1;
+    }
+    int col = px / cell_w;
+    int row = py / cell_h;
+    if (col < 0 || col >= GRID_COLS || row < 0 || row >= GRID_ROWS) {
+      return -1;
+    }
+    int idx = row * GRID_COLS + col;
+    if (idx >= stream_count) {
+      return -1;
+    }
+    return idx;
+  };
+
+  auto clear_canvas_slot = [&](int idx) {
+    if (single_w <= 0 || single_h <= 0 || idx < 0 || idx >= stream_count) {
+      return;
+    }
+    int col = idx % GRID_COLS;
+    int row = idx / GRID_COLS;
+    int dst_x = col * single_w;
+    int dst_y = row * single_h;
+
+    uint8_t *dst = canvas_data[0] + dst_y * canvas_linesize[0] + dst_x * 3;
+    int dst_pitch = canvas_linesize[0];
+    for (int y = 0; y < single_h && (dst_y + y) < canvas_h; ++y) {
+      std::memset(dst + y * dst_pitch, 0, single_w * 3);
+    }
+  };
+
+  bool quit = false;
+  SDL_Event event;
+
+  // Set up thread info callback now that quit is declared
+  auto thread_info_callback =
+      [&]() -> std::vector<ConfigurationPanel::ThreadInfo> {
+    std::vector<ConfigurationPanel::ThreadInfo> threads;
+
+    // Add info for each stream worker thread
+    for (int i = 0; i < stream_count; ++i) {
+      ConfigurationPanel::ThreadInfo info;
+      std::string stream_label = (i < static_cast<int>(stream_names.size()) &&
+                                  !stream_names[i].empty())
+                                     ? stream_names[i]
+                                     : ("Stream " + std::to_string(i));
+      info.name = "Stream Worker: " + stream_label;
+
+      bool has_context = streams[i].fmt_ctx != nullptr;
+      bool worker_running = streams[i].worker.joinable();
+      bool worker_failed = streams[i].worker_failed.load();
+
+      info.is_active = has_context && worker_running && !worker_failed;
+
+      if (!has_context) {
+        info.details = "Stream not opened";
+      } else if (worker_failed) {
+        info.details = "Worker failed";
+      } else if (!worker_running) {
+        info.details = "Worker not started";
+      } else {
+        info.details = "Processing video/audio packets";
+      }
+
+      threads.push_back(info);
+    }
+
+    // Client worker threads heading
+    ConfigurationPanel::ThreadInfo client_heading;
+    client_heading.name = "=== Client Workers ===";
+    client_heading.is_active = true;
+    client_heading.details = "";
+    threads.push_back(client_heading);
+
+    // Add async network worker thread info
+    ConfigurationPanel::ThreadInfo network_thread;
+    network_thread.name = "  Network Worker";
+    network_thread.is_active = async_network_worker.isRunning();
+    if (async_network_worker.isProcessing()) {
+      network_thread.details = "Processing network request";
+    } else {
+      size_t queue_size = async_network_worker.getQueueSize();
+      if (queue_size > 0) {
+        network_thread.details =
+            "Idle (" + std::to_string(queue_size) + " queued)";
+      } else {
+        network_thread.details = "Idle (no tasks)";
+      }
+    }
+    threads.push_back(network_thread);
+
+    // Add motion frame worker thread info
+    if (auto *motion_worker = configuration_panel.getMotionFrameWorker()) {
+      ConfigurationPanel::ThreadInfo motion_thread;
+      motion_thread.name = "  Motion Frame Worker";
+      motion_thread.is_active = motion_worker->isRunning();
+      if (motion_worker->isProcessing()) {
+        motion_thread.details = "Fetching motion frame";
+      } else {
+        size_t queue_size = motion_worker->getQueueSize();
+        if (queue_size > 0) {
+          motion_thread.details =
+              "Idle (" + std::to_string(queue_size) + " queued)";
+        } else {
+          motion_thread.details = "Idle (no tasks)";
+        }
+      }
+      threads.push_back(motion_thread);
+    }
+
+    // Add main thread info
+    ConfigurationPanel::ThreadInfo main_thread;
+    main_thread.name = "  Main Thread";
+    main_thread.is_active = !quit;
+    main_thread.details =
+        quit ? "Shutting down" : "Event loop, rendering, ImGui";
+    threads.push_back(main_thread);
+
+    // Note: Server threads are fetched asynchronously by ConfigurationPanel
+    // and displayed separately to avoid blocking the UI
+
+    return threads;
+  };
+  configuration_panel.setThreadInfoCallback(thread_info_callback);
+
+  // Helper lambda: blit stream i’s RGB frame into its quadrant
+  auto blit_stream_to_canvas = [&](int idx) {
+    if (idx < 0 || idx >= stream_count) {
+      return;
+    }
+    VideoStreamCtx &s = streams[idx];
+    int col = idx % GRID_COLS;
+    int row = idx / GRID_COLS;
+
+    int dst_x = col * single_w;
+    int dst_y = row * single_h;
+    uint8_t *dst = canvas_data[0] + dst_y * canvas_linesize[0] + dst_x * 3;
+    int dst_pitch = canvas_linesize[0];
+    bool frame_copied = false;
+
+    {
+      std::lock_guard<std::mutex> lock(s.frame_mutex);
+      if (!s.vctx || !s.vframe_rgb || s.frame_width <= 0 ||
+          s.frame_height <= 0) {
+        return;
+      }
+      if (!s.frame_available ||
+          s.frame_generation == s.last_consumed_generation) {
+        return;
+      }
+
+      uint8_t *src = s.vframe_rgb->data[0];
+      int src_pitch = s.rgb_linesize;
+      for (int y = 0; y < s.frame_height && y + dst_y < canvas_h; ++y) {
+        std::memcpy(dst + y * dst_pitch, src + y * src_pitch,
+                    s.frame_width * 3);
+      }
+      s.last_consumed_generation = s.frame_generation;
+      frame_copied = true;
+    }
+
+    if (frame_copied) {
+      std::lock_guard<std::mutex> lock(stream_state_mutex);
+      if (idx < static_cast<int>(stream_last_frame_times.size())) {
+        stream_last_frame_times[idx] = std::chrono::steady_clock::now();
+      }
+      if (idx < static_cast<int>(stream_stall_reported.size())) {
+        stream_stall_reported[idx] = false;
+      }
+    }
+  };
+
+  // --- Main loop: round-robin reading ---
+#ifdef DEBUG_LOGGING
+  std::cerr << "[diag] entering main loop" << "\n";
+#endif
+  while (!quit) {
+#ifdef DEBUG_LOGGING
+    std::cerr << "[diag] top of loop quit flag: " << quit << "\n";
+#endif
+    while (SDL_PollEvent(&event)) {
+#ifdef DEBUG_LOGGING
+      std::cerr << "[diag] SDL event type: " << event.type << "\n";
+#endif
+      ImGui_ImplSDL2_ProcessEvent(&event);
+      if (event.type == SDL_QUIT) {
+#ifdef DEBUG_LOGGING
+        std::cerr << "[diag] SDL_QUIT received" << "\n";
+#endif
+        quit = true;
+      } else if (event.type == SDL_KEYDOWN) {
+#ifdef DEBUG_LOGGING
+        std::cerr << "[diag] SDL keydown: "
+                  << SDL_GetKeyName(event.key.keysym.sym) << "\n";
+#endif
+        if (event.key.keysym.sym == SDLK_q ||
+            event.key.keysym.sym == SDLK_ESCAPE)
+          quit = true;
+      } else if (event.type == SDL_MOUSEBUTTONDOWN) {
+        if (event.button.button == SDL_BUTTON_RIGHT) {
+          context_stream_index =
+              stream_index_from_point(event.button.x, event.button.y);
+          show_context_menu = true;
+          context_menu_pos = ImVec2(static_cast<float>(event.button.x),
+                                    static_cast<float>(event.button.y));
+        } else if (event.button.button == SDL_BUTTON_LEFT) {
+          if (show_context_menu && !menu_hovered) {
+            show_context_menu = false;
+          } else if (!show_context_menu && !fullscreen_view) {
+            // Switch audio source on left-click
+            int clicked_stream =
+                stream_index_from_point(event.button.x, event.button.y);
+            if (clicked_stream >= 0 && clicked_stream < stream_count &&
+                clicked_stream != active_audio_stream.load() &&
+                streams[clicked_stream].fmt_ctx) {
+              int prev_stream = active_audio_stream.load();
+              AUDIO_LOG("Switching audio from stream "
+                        << prev_stream << " to stream " << clicked_stream);
+              active_audio_stream.store(clicked_stream);
+              if (!configure_audio(streams[clicked_stream])) {
+                std::cerr << "Failed to configure audio for clicked stream\n";
+              } else {
+                audio_controls_last_interaction_time =
+                    std::chrono::steady_clock::now();
+                // Show notification
+                std::string to_name =
+                    (clicked_stream < static_cast<int>(stream_names.size()) &&
+                     !stream_names[clicked_stream].empty())
+                        ? stream_names[clicked_stream]
+                        : ("Stream " + std::to_string(clicked_stream));
+                audio_switch_notification = "Audio: " + to_name;
+                audio_switch_notification_time =
+                    std::chrono::steady_clock::now();
+              }
+            }
+          }
+        }
+      } else if (event.type == SDL_MOUSEMOTION) {
+        last_pointer_activity_time = std::chrono::steady_clock::now();
+        hovered_stream =
+            stream_index_from_point(event.motion.x, event.motion.y);
+      } else if (event.type == SDL_WINDOWEVENT &&
+                 event.window.event == SDL_WINDOWEVENT_LEAVE) {
+        hovered_stream = -1;
+      }
+    }
+
+#ifdef DEBUG_LOGGING
+    std::cerr << "[diag] quit flag after events: " << quit << "\n";
+#endif
+
+    ImGui_ImplSDLRenderer2_NewFrame();
+    ImGui_ImplSDL2_NewFrame();
+    ImGui::NewFrame();
+    const auto frame_now = std::chrono::steady_clock::now();
+
+    int effective_hovered_stream = hovered_stream;
+    if (effective_hovered_stream >= 0 &&
+        (frame_now - last_pointer_activity_time) > kOverlayAutoHideDuration) {
+      effective_hovered_stream = -1;
+    }
+    const double stall_threshold_seconds =
+        std::chrono::duration<double>(kStreamStallThreshold).count();
+
+    for (int i = 0; i < stream_count; ++i) {
+      blit_stream_to_canvas(i);
+    }
+
+    for (int i = 0; i < stream_count; ++i) {
+      if (!streams[i].pending_reference_update.load()) {
+        continue;
+      }
+
+      int new_w = 0;
+      int new_h = 0;
+      bool have_dimensions = false;
+      {
+        std::lock_guard<std::mutex> lock(streams[i].frame_mutex);
+        if (streams[i].frame_width > 0 && streams[i].frame_height > 0) {
+          new_w = streams[i].frame_width;
+          new_h = streams[i].frame_height;
+          have_dimensions = true;
+        }
+        streams[i].pending_reference_update.store(false);
+      }
+
+      if (!have_dimensions) {
+        continue;
+      }
+
+      bool update_reference = !reference_dimensions_ready || i == 0;
+      if (update_reference) {
+        single_w = new_w;
+        single_h = new_h;
+        reference_dimensions_ready = true;
+        placeholder_dimensions = false;
+        if (ensure_canvas_dimensions) {
+          ensure_canvas_dimensions(single_w, single_h, false);
+        }
+      }
+    }
+
+    for (int i = 0; i < stream_count; ++i) {
+      if (!streams[i].worker_failed.load()) {
+        continue;
+      }
+
+      std::string stream_label = (i < static_cast<int>(stream_names.size()) &&
+                                  !stream_names[i].empty())
+                                     ? stream_names[i]
+                                     : ("Stream " + std::to_string(i));
+#ifdef DEBUG_LOGGING
+      std::cerr << "[diag] Worker failure detected for \"" << stream_label
+                << "\"\n";
+#endif
+      release_stream(streams[i]);
+      clear_canvas_slot(i);
+      schedule_stream_retry(i, kStreamRetryInitialDelay);
+    }
+
+    if (show_context_menu) {
+      ImGui::SetNextWindowPos(context_menu_pos, ImGuiCond_Always,
+                              ImVec2(0.0f, 0.0f));
+      ImGui::SetNextWindowBgAlpha(0.9f);
+      menu_hovered = false;
+      if (ImGui::Begin("##context_menu", &show_context_menu,
+                       ImGuiWindowFlags_NoDecoration |
+                           ImGuiWindowFlags_AlwaysAutoResize |
+                           ImGuiWindowFlags_NoMove |
+                           ImGuiWindowFlags_NoSavedSettings)) {
+        if (ImGui::IsWindowHovered(
+                ImGuiHoveredFlags_AllowWhenBlockedByPopup |
+                ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)) {
+          menu_hovered = true;
+        }
+        ImGui::TextUnformatted("Actions");
+        ImGui::Separator();
+        bool can_reload_stream =
+            context_stream_index >= 0 && context_stream_index < stream_count;
+        if (ImGui::MenuItem("Reload this stream", nullptr, false,
+                            can_reload_stream)) {
+          reload_stream_requested = context_stream_index;
+          show_context_menu = false;
+        }
+        if (ImGui::MenuItem("Reload all streams")) {
+          reload_all_requested = true;
+          show_context_menu = false;
+        }
+        ImGui::Separator();
+        bool can_toggle_overlay =
+            context_stream_index >= 0 && context_stream_index < stream_count;
+        if (ImGui::MenuItem(
+                "Always show overlay (stream)", nullptr,
+                can_toggle_overlay
+                    ? overlay_always_show_stream[context_stream_index]
+                    : false,
+                can_toggle_overlay)) {
+          overlay_always_show_stream[context_stream_index] =
+              !overlay_always_show_stream[context_stream_index];
+        }
+        if (ImGui::MenuItem("Always show overlay (all streams)", nullptr,
+                            overlay_always_show_all)) {
+          overlay_always_show_all = !overlay_always_show_all;
+          std::fill(overlay_always_show_stream.begin(),
+                    overlay_always_show_stream.end(), overlay_always_show_all);
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Diagnostics overlay", nullptr,
+                            show_diagnostics_overlay)) {
+          show_diagnostics_overlay = !show_diagnostics_overlay;
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Configuration", nullptr,
+                            show_configuration_panel)) {
+          show_configuration_panel = true;
+          configuration_panel.requestTab(ConfigurationPanel::Tab::General);
+          show_context_menu = false;
+        }
+        if (ImGui::MenuItem("Add Camera")) {
+          show_configuration_panel = true;
+          configuration_panel.requestTab(ConfigurationPanel::Tab::AddCamera);
+          show_context_menu = false;
+        }
+        // Remove Camera - only enabled if clicking on a valid camera stream
+        bool can_remove_camera =
+            context_stream_index >= 0 &&
+            context_stream_index < static_cast<int>(stream_configs.size());
+        if (ImGui::MenuItem("Remove Camera", nullptr, false,
+                            can_remove_camera)) {
+          remove_camera_requested = context_stream_index;
+          show_context_menu = false;
+        }
+        // More stream settings - only enabled if clicking on a valid camera
+        // stream
+        bool can_configure_rtsp =
+            context_stream_index >= 0 &&
+            context_stream_index < static_cast<int>(stream_configs.size());
+        if (ImGui::MenuItem("More stream settings", nullptr, false,
+                            can_configure_rtsp)) {
+          configuration_panel.requestRTSPConfig(context_stream_index);
+          show_context_menu = false;
+        }
+        // Motion Frames menu item (always enabled)
+        if (ImGui::MenuItem("Motion Frames")) {
+          show_configuration_panel = true;
+          configuration_panel.requestTab(ConfigurationPanel::Tab::MotionFrame);
+          show_context_menu = false;
+        }
+        if (ImGui::MenuItem("Show Info")) {
+          show_configuration_panel = true;
+          configuration_panel.requestTab(ConfigurationPanel::Tab::Info);
+          show_context_menu = false;
+        }
+        ImGui::Separator();
+        if (!window_is_fullscreen) {
+          if (ImGui::MenuItem("Fullscreen window")) {
+            if (SDL_SetWindowFullscreen(win, SDL_WINDOW_FULLSCREEN_DESKTOP) ==
+                0) {
+              window_is_fullscreen = true;
+            } else {
+              std::cerr << "Failed to fullscreen window: " << SDL_GetError()
+                        << "\n";
+            }
+            show_context_menu = false;
+          }
+        } else if (!fullscreen_view) {
+          if (ImGui::MenuItem("Exit fullscreen window")) {
+            if (SDL_SetWindowFullscreen(win, 0) == 0) {
+              window_is_fullscreen = false;
+            } else {
+              std::cerr << "Failed to exit fullscreen: " << SDL_GetError()
+                        << "\n";
+            }
+            show_context_menu = false;
+          }
+        }
+        if (!fullscreen_view) {
+          bool can_fullscreen =
+              context_stream_index >= 0 && context_stream_index < stream_count;
+          if (ImGui::MenuItem("Fullscreen stream", nullptr, false,
+                              can_fullscreen)) {
+            if (!window_is_fullscreen) {
+              if (SDL_SetWindowFullscreen(win, SDL_WINDOW_FULLSCREEN_DESKTOP) ==
+                  0) {
+                window_is_fullscreen = true;
+              } else {
+                std::cerr << "Failed to enter fullscreen: " << SDL_GetError()
+                          << "\n";
+              }
+            }
+            fullscreen_view = true;
+            fullscreen_stream = context_stream_index;
+            hovered_stream = fullscreen_stream;
+
+            // Switch audio to the fullscreen stream
+            if (context_stream_index != active_audio_stream.load() &&
+                context_stream_index < stream_count &&
+                streams[context_stream_index].fmt_ctx) {
+              int prev_stream = active_audio_stream.load();
+              AUDIO_LOG("Switching audio from stream " << prev_stream
+                                                       << " to stream "
+                                                       << context_stream_index);
+              active_audio_stream.store(context_stream_index);
+              if (!configure_audio(streams[context_stream_index])) {
+                std::cerr
+                    << "Failed to configure audio for fullscreen stream\n";
+              } else {
+                audio_controls_last_interaction_time =
+                    std::chrono::steady_clock::now();
+                // Show notification
+                std::string to_name =
+                    (context_stream_index <
+                         static_cast<int>(stream_names.size()) &&
+                     !stream_names[context_stream_index].empty())
+                        ? stream_names[context_stream_index]
+                        : ("Stream " + std::to_string(context_stream_index));
+                audio_switch_notification = "Audio: " + to_name;
+                audio_switch_notification_time =
+                    std::chrono::steady_clock::now();
+              }
+            }
+
+            show_context_menu = false;
+          }
+        } else {
+          if (ImGui::MenuItem("Exit stream fullscreen")) {
+            fullscreen_view = false;
+            fullscreen_stream = -1;
+            hovered_stream = -1;
+
+            // Switch audio back to stream 0
+            if (active_audio_stream.load() != 0 && stream_count > 0 &&
+                streams[0].fmt_ctx) {
+              int prev_stream = active_audio_stream.load();
+              AUDIO_LOG("Switching audio back to stream 0 from stream "
+                        << prev_stream);
+              active_audio_stream.store(0);
+              if (!configure_audio(streams[0])) {
+                std::cerr << "Failed to reconfigure audio for stream 0\n";
+              } else {
+                audio_controls_last_interaction_time =
+                    std::chrono::steady_clock::now();
+                // Show notification
+                std::string to_name =
+                    (!stream_names.empty() && !stream_names[0].empty())
+                        ? stream_names[0]
+                        : "Stream 0";
+                audio_switch_notification = "Audio: " + to_name;
+                audio_switch_notification_time =
+                    std::chrono::steady_clock::now();
+              }
+            }
+
+            show_context_menu = false;
+          }
+        }
+        if (ImGui::MenuItem("Exit")) {
+          quit = true;
+          show_context_menu = false;
+        }
+        ImGui::End();
+      }
+    }
+
+    if (show_metrics_window) {
+      ImGui::ShowMetricsWindow(&show_metrics_window);
+    }
+
+    if (show_diagnostics_overlay) {
+      ImGui::SetNextWindowBgAlpha(0.85f);
+      ImGui::SetNextWindowPos(ImVec2(20.0f, 20.0f), ImGuiCond_FirstUseEver);
+      if (ImGui::Begin("Diagnostics", &show_diagnostics_overlay,
+                       ImGuiWindowFlags_NoSavedSettings |
+                           ImGuiWindowFlags_AlwaysAutoResize |
+                           ImGuiWindowFlags_NoCollapse)) {
+        ImGuiIO &io = ImGui::GetIO();
+        ImGui::Text("FPS: %.1f", io.Framerate);
+        ImGui::Text("Frame time: %.2f ms",
+                    io.Framerate > 0.0f ? 1000.0f / io.Framerate : 0.0f);
+        ImGui::Text("Streams: %d", stream_count);
+        if (reload_all_requested) {
+          ImGui::TextUnformatted("Reload queue: all streams");
+        } else if (reload_stream_requested >= 0) {
+          ImGui::Text("Reload queue: stream %d", reload_stream_requested);
+        } else {
+          ImGui::TextUnformatted("Reload queue: idle");
+        }
+        ImGui::Separator();
+        for (int i = 0; i < stream_count; ++i) {
+          std::string stream_label =
+              (i < static_cast<int>(stream_names.size()) &&
+               !stream_names[i].empty())
+                  ? stream_names[i]
+                  : ("Stream " + std::to_string(i));
+          bool is_open = streams[i].fmt_ctx != nullptr;
+          bool has_timestamp = stream_last_frame_times[i] !=
+                               std::chrono::steady_clock::time_point{};
+          double last_age = has_timestamp
+                                ? std::chrono::duration<double>(
+                                      frame_now - stream_last_frame_times[i])
+                                      .count()
+                                : 0.0;
+          bool stalled =
+              is_open && has_timestamp && last_age > stall_threshold_seconds;
+          bool awaiting_retry =
+              !is_open && stream_retry_deadlines[i] !=
+                              std::chrono::steady_clock::time_point{};
+          double retry_in = awaiting_retry
+                                ? std::chrono::duration<double>(
+                                      stream_retry_deadlines[i] - frame_now)
+                                      .count()
+                                : 0.0;
+          if (retry_in < 0.0)
+            retry_in = 0.0;
+          ImVec4 header_color =
+              stalled ? ImVec4(0.90f, 0.35f, 0.20f, 1.0f)
+                      : (is_open ? ImVec4(0.25f, 0.80f, 0.25f, 1.0f)
+                                 : (awaiting_retry
+                                        ? ImVec4(0.95f, 0.75f, 0.25f, 1.0f)
+                                        : ImVec4(0.70f, 0.70f, 0.70f, 1.0f)));
+          ImGui::TextColored(header_color, "%d: %s", i, stream_label.c_str());
+          ImGui::Indent();
+          if (is_open) {
+            ImGui::Text("State: %s", stalled ? "stalled" : "active");
+            if (has_timestamp) {
+              ImGui::Text("Last frame: %.1f s ago", last_age);
+            } else {
+              ImGui::TextUnformatted("Last frame: pending");
+            }
+          } else {
+            ImGui::Text("State: %s",
+                        awaiting_retry ? "waiting for retry" : "closed");
+            if (awaiting_retry) {
+              ImGui::Text("Retry in: %.1f s", retry_in);
+            }
+          }
+          ImGui::Unindent();
+          if (i + 1 < stream_count) {
+            ImGui::Separator();
+          }
+        }
+      }
+      ImGui::End();
+    }
+
+    for (int i = 0; i < stream_count; ++i) {
+      if (i >= static_cast<int>(stream_last_frame_times.size())) {
+        break;
+      }
+      if (!streams[i].fmt_ctx) {
+        stream_stall_reported[i] = false;
+        continue;
+      }
+      auto last = stream_last_frame_times[i];
+      if (last == std::chrono::steady_clock::time_point{}) {
+        continue;
+      }
+      double age = std::chrono::duration<double>(frame_now - last).count();
+      if (age > stall_threshold_seconds) {
+        if (!stream_stall_reported[i]) {
+          std::string stream_label =
+              (i < static_cast<int>(stream_names.size()) &&
+               !stream_names[i].empty())
+                  ? stream_names[i]
+                  : ("Stream " + std::to_string(i));
+          std::ostringstream oss;
+          oss << std::fixed << std::setprecision(1) << age;
+#ifdef DEBUG_LOGGING
+          std::cerr << "[diag] Stream \"" << stream_label << "\" stalled for "
+                    << oss.str() << "s\n";
+#endif
+          stream_stall_reported[i] = true;
+        }
+      } else if (stream_stall_reported[i]) {
+        std::string stream_label = (i < static_cast<int>(stream_names.size()) &&
+                                    !stream_names[i].empty())
+                                       ? stream_names[i]
+                                       : ("Stream " + std::to_string(i));
+        std::ostringstream oss;
+        oss << std::fixed << std::setprecision(1) << age;
+#ifdef DEBUG_LOGGING
+        std::cerr << "[diag] Stream \"" << stream_label << "\" recovered ("
+                  << oss.str() << "s since last frame)\n";
+#endif
+        stream_stall_reported[i] = false;
+      }
+    }
+
+    std::vector<int> overlay_targets;
+    overlay_targets.reserve(stream_count);
+    auto add_overlay_target = [&](int idx) {
+      if (idx < 0 || idx >= stream_count)
+        return;
+      if (std::find(overlay_targets.begin(), overlay_targets.end(), idx) ==
+          overlay_targets.end()) {
+        overlay_targets.push_back(idx);
+      }
+    };
+
+    if (overlay_always_show_all) {
+      for (int i = 0; i < stream_count; ++i)
+        add_overlay_target(i);
+    } else {
+      for (int i = 0; i < stream_count; ++i) {
+        if (overlay_always_show_stream[i])
+          add_overlay_target(i);
+      }
+    }
+    add_overlay_target(effective_hovered_stream);
+
+    if (!overlay_targets.empty()) {
+      int out_w = 0;
+      int out_h = 0;
+      if (SDL_GetRendererOutputSize(renderer, &out_w, &out_h) == 0 &&
+          out_w > 0 && out_h > 0) {
+        for (int idx : overlay_targets) {
+          ImVec2 overlay_pos;
+          if (fullscreen_view && fullscreen_stream == idx) {
+            overlay_pos = ImVec2(20.0f, 20.0f);
+          } else if (!fullscreen_view) {
+            int cell_w = out_w / GRID_COLS;
+            int cell_h = out_h / GRID_ROWS;
+            int col = idx % GRID_COLS;
+            int row = idx / GRID_COLS;
+            overlay_pos = ImVec2(static_cast<float>(col * cell_w + 12),
+                                 static_cast<float>(row * cell_h + 12));
+          } else {
+            continue;
+          }
+
+          std::string window_name = "##overlay" + std::to_string(idx);
+          ImGui::SetNextWindowPos(overlay_pos, ImGuiCond_Always);
+          ImGui::SetNextWindowBgAlpha(0.75f);
+          ImGuiWindowFlags overlay_flags =
+              ImGuiWindowFlags_NoDecoration |
+              ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove |
+              ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoInputs;
+          if (ImGui::Begin(window_name.c_str(), nullptr, overlay_flags)) {
+            if (idx >= 0 && idx < static_cast<int>(stream_names.size())) {
+              ImGui::TextUnformatted(stream_names[idx].c_str());
+            }
+          }
+          ImGui::End();
+        }
+      }
+    }
+
+    configuration_panel.render(show_configuration_panel);
+    configuration_panel.renderRTSPConfigPopup();
+
+    // Render unavailable stream status overlays
+    {
+      int out_w = 0;
+      int out_h = 0;
+      if (SDL_GetRendererOutputSize(renderer, &out_w, &out_h) == 0 &&
+          out_w > 0 && out_h > 0) {
+        for (int i = 0; i < stream_count; ++i) {
+          // Show status message for streams that are not connected
+          if (!streams[i].fmt_ctx && !fullscreen_view) {
+            int cell_w = out_w / GRID_COLS;
+            int cell_h = out_h / GRID_ROWS;
+            int col = i % GRID_COLS;
+            int row = i / GRID_COLS;
+
+            // Center the status message in the cell
+            ImVec2 cell_center =
+                ImVec2(static_cast<float>(col * cell_w + cell_w / 2),
+                       static_cast<float>(row * cell_h + cell_h / 2));
+
+            std::string status_window_name = "##status" + std::to_string(i);
+            ImGui::SetNextWindowPos(cell_center, ImGuiCond_Always,
+                                    ImVec2(0.5f, 0.5f));
+            ImGui::SetNextWindowBgAlpha(0.85f);
+            ImGuiWindowFlags status_flags =
+                ImGuiWindowFlags_NoDecoration |
+                ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove |
+                ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoInputs;
+
+            if (ImGui::Begin(status_window_name.c_str(), nullptr,
+                             status_flags)) {
+              std::string stream_label =
+                  (i < static_cast<int>(stream_names.size()) &&
+                   !stream_names[i].empty())
+                      ? stream_names[i]
+                      : ("Stream " + std::to_string(i));
+              ImGui::TextUnformatted(stream_label.c_str());
+              ImGui::Separator();
+              ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f),
+                                 "Not available");
+
+              // Show retry countdown if scheduled
+              if (i < static_cast<int>(stream_retry_deadlines.size()) &&
+                  stream_retry_deadlines[i] !=
+                      std::chrono::steady_clock::time_point{}) {
+                auto remaining =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        stream_retry_deadlines[i] - frame_now);
+                if (remaining.count() > 0) {
+                  float seconds = remaining.count() / 1000.0f;
+                  ImGui::Text("Retry in %.1fs", seconds);
+                } else {
+                  ImGui::TextUnformatted("Reconnecting...");
+                }
+              }
+            }
+            ImGui::End();
+          }
+        }
+      }
+    }
+
+    // Render audio controls overlay (only when the active stream actually has
+    // audio).
+    {
+      const int audio_stream_idx = active_audio_stream.load();
+      const bool audio_active =
+          audio_stream_idx >= 0 && audio_stream_idx < stream_count &&
+          streams[audio_stream_idx].fmt_ctx &&
+          streams[audio_stream_idx].audio_stream_index != -1 &&
+          audio_device_open;
+
+      const bool show_audio_controls =
+          audio_active && (effective_hovered_stream == audio_stream_idx ||
+                           (frame_now - audio_controls_last_interaction_time) <
+                               kOverlayAutoHideDuration);
+
+      if (show_audio_controls) {
+        int out_w = 0;
+        int out_h = 0;
+        if (SDL_GetRendererOutputSize(renderer, &out_w, &out_h) == 0 &&
+            out_w > 0 && out_h > 0) {
+          ImVec2 overlay_pos;
+          if (fullscreen_view && fullscreen_stream == audio_stream_idx) {
+            overlay_pos = ImVec2(20.0f, 20.0f);
+          } else if (!fullscreen_view) {
+            int cell_w = out_w / GRID_COLS;
+            int cell_h = out_h / GRID_ROWS;
+            int col = audio_stream_idx % GRID_COLS;
+            int row = audio_stream_idx / GRID_COLS;
+            overlay_pos = ImVec2(static_cast<float>(col * cell_w + 12),
+                                 static_cast<float>(row * cell_h + 44));
+          } else {
+            overlay_pos = ImVec2(20.0f, 20.0f);
+          }
+
+          ImGui::SetNextWindowPos(overlay_pos, ImGuiCond_Always);
+          ImGui::SetNextWindowBgAlpha(0.80f);
+          ImGuiWindowFlags audio_overlay_flags =
+              ImGuiWindowFlags_NoDecoration |
+              ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove |
+              ImGuiWindowFlags_NoSavedSettings;
+
+          if (ImGui::Begin("##audio_controls", nullptr, audio_overlay_flags)) {
+            if (ImGui::IsWindowHovered(
+                    ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)) {
+              audio_controls_last_interaction_time = frame_now;
+            }
+
+            std::string active_name =
+                (audio_stream_idx < static_cast<int>(stream_names.size()) &&
+                 !stream_names[audio_stream_idx].empty())
+                    ? stream_names[audio_stream_idx]
+                    : ("Stream " + std::to_string(audio_stream_idx));
+            ImGui::Text("Audio: %s", active_name.c_str());
+
+            bool muted = audio_data.muted.load(std::memory_order_relaxed);
+            if (ImGui::Checkbox("Mute", &muted)) {
+              audio_data.muted.store(muted, std::memory_order_relaxed);
+              audio_controls_last_interaction_time = frame_now;
+            }
+
+            int volume =
+                audio_data.volume_percent.load(std::memory_order_relaxed);
+            if (ImGui::SliderInt("Volume", &volume, 0, 100)) {
+              volume = std::clamp(volume, 0, 100);
+              audio_data.volume_percent.store(volume,
+                                              std::memory_order_relaxed);
+              audio_controls_last_interaction_time = frame_now;
+            }
+          }
+          ImGui::End();
+        }
+      }
+    }
+
+    // Render audio switch notification
+    if (!audio_switch_notification.empty()) {
+      auto now = std::chrono::steady_clock::now();
+      auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+          now - audio_switch_notification_time);
+
+      if (elapsed < kNotificationDisplayDuration) {
+        float alpha = 1.0f;
+
+        // Fade in
+        if (elapsed < kNotificationFadeInDuration) {
+          alpha = static_cast<float>(elapsed.count()) /
+                  static_cast<float>(kNotificationFadeInDuration.count());
+        }
+        // Fade out
+        else if (elapsed >
+                 kNotificationDisplayDuration - kNotificationFadeOutDuration) {
+          auto fade_time = elapsed - (kNotificationDisplayDuration -
+                                      kNotificationFadeOutDuration);
+          alpha =
+              1.0f - (static_cast<float>(fade_time.count()) /
+                      static_cast<float>(kNotificationFadeOutDuration.count()));
+        }
+
+        alpha = std::max(0.0f, std::min(1.0f, alpha));
+
+        int out_w = 0;
+        int out_h = 0;
+        if (SDL_GetRendererOutputSize(renderer, &out_w, &out_h) == 0 &&
+            out_w > 0 && out_h > 0) {
+          ImGui::SetNextWindowPos(ImVec2(out_w * 0.5f, out_h * 0.1f),
+                                  ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+          ImGui::SetNextWindowBgAlpha(0.85f * alpha);
+          ImGuiWindowFlags notification_flags =
+              ImGuiWindowFlags_NoDecoration |
+              ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove |
+              ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoInputs |
+              ImGuiWindowFlags_NoFocusOnAppearing;
+
+          if (ImGui::Begin("##audio_notification", nullptr,
+                           notification_flags)) {
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                                  ImVec4(1.0f, 1.0f, 1.0f, alpha));
+            ImGui::TextUnformatted(audio_switch_notification.c_str());
+            ImGui::PopStyleColor();
+          }
+          ImGui::End();
+        }
+      } else {
+        audio_switch_notification.clear();
+      }
+    }
+
+    if (quit) {
+#ifdef DEBUG_LOGGING
+      std::cerr << "[diag] quit set before reload checks" << "\n";
+#endif
+    }
+
+    // Handle camera removal
+    if (remove_camera_requested >= 0 &&
+        remove_camera_requested < stream_count) {
+      int idx = remove_camera_requested;
+      std::string camera_name = stream_configs[idx].name;
+      bool via_server = stream_configs[idx].via_server;
+
+      GRID_LOG("REMOVE CAMERA: idx=" << idx << ", name=" << camera_name
+                                     << ", stream_count=" << stream_count
+                                     << ", streams.size()=" << streams.size());
+
+      // Release the stream to stop workers cleanly
+      release_stream(streams[idx]);
+      clear_canvas_slot(idx);
+
+      // Cancel any pending retry
+      {
+        std::lock_guard<std::mutex> lock(stream_state_mutex);
+        if (idx < static_cast<int>(stream_retry_deadlines.size())) {
+          stream_retry_deadlines[idx] = std::chrono::steady_clock::time_point{};
+        }
+      }
+
+      // Remove from configuration vectors (stream_configs must be updated
+      // before reload)
+      stream_configs.erase(stream_configs.begin() + idx);
+      stream_urls.erase(stream_urls.begin() + idx);
+      stream_names.erase(stream_names.begin() + idx);
+      overlay_always_show_stream.erase(overlay_always_show_stream.begin() +
+                                       idx);
+      stream_retry_deadlines.erase(stream_retry_deadlines.begin() + idx);
+      stream_last_frame_times.erase(stream_last_frame_times.begin() + idx);
+      stream_stall_reported.erase(stream_stall_reported.begin() + idx);
+
+      // Update stream count before reload
+      stream_count = static_cast<int>(stream_configs.size());
+
+      GRID_LOG("After removal: stream_count=" << stream_count
+                                              << ", stream_configs.size()="
+                                              << stream_configs.size());
+
+      // Persist config immediately so reload uses correct data
+      persist_config();
+
+      // Notify server asynchronously (non-blocking, won't crash if server down)
+      if (via_server) {
+        async_network_worker.enqueueTask(
+            [camera_name, endpoint = client_config.server_endpoint]() {
+              bool success =
+                  client_network::remove_camera(endpoint, camera_name);
+              if (!success) {
+                std::cerr << "Failed to remove camera from server: "
+                          << camera_name << "\n";
+              }
+            });
+      }
+
+      std::cerr << "Camera removed: " << camera_name << " (was index " << idx
+                << ")\n";
+
+      // Schedule a full reload to properly rebuild streams deque
+      // This is necessary because VideoStreamCtx can't be moved/copied
+      reload_all_requested = true;
+      remove_camera_requested = -1;
+    }
+
+    if (reload_stream_requested < 0) {
+      for (int i = 0; i < stream_count; ++i) {
+        if (streams[i].fmt_ctx) {
+          continue;
+        }
+        if (stream_retry_deadlines[i] !=
+                std::chrono::steady_clock::time_point{} &&
+            frame_now >= stream_retry_deadlines[i]) {
+          reload_stream_requested = i;
+          stream_retry_deadlines[i] = std::chrono::steady_clock::time_point{};
+          break;
+        }
+      }
+    }
+
+    if (reload_all_requested || reload_stream_requested >= 0) {
+      bool need_audio_reset =
+          reload_all_requested || reload_stream_requested == 0;
+      if (need_audio_reset && audio_device_open) {
+        SDL_PauseAudio(1);
+      }
+
+      if (reload_all_requested) {
+        GRID_LOG("RELOAD ALL: stream_count="
+                 << stream_count << ", streams.size()=" << streams.size());
+
+        std::fill(canvas_buffer.begin(), canvas_buffer.end(), 0);
+
+        // Release all existing streams (this will wait for workers to finish)
+        GRID_LOG("Releasing " << streams.size() << " existing streams...");
+        for (auto &stream : streams) {
+          release_stream(stream);
+        }
+
+        // Reinitialize streams deque to match the new stream_count
+        streams.clear();
+        streams.resize(stream_count);
+        GRID_LOG("Streams deque resized to: " << stream_count);
+
+        bool stream0_reopened = false;
+        std::vector<int> streams_to_restart;
+        streams_to_restart.reserve(stream_count);
+        for (int i = 0; i < stream_count; ++i) {
+          GRID_LOG("Reloading stream " << i << ": " << stream_urls[i]);
+          if (!open_stream(i, stream_urls[i], i == 0)) {
+            std::cerr << "Failed to reload stream: " << stream_urls[i] << "\n";
+            schedule_stream_retry(i, kStreamRetryInitialDelay);
+            GRID_LOG("Stream " << i << " failed, scheduled for retry");
+            continue; // Don't break - try to open remaining streams
+          }
+          record_stream_open(i);
+          if (ensure_canvas_dimensions && streams[i].vctx) {
+            GRID_LOG("Stream " << i << " dimensions: " << streams[i].vctx->width
+                               << "x" << streams[i].vctx->height);
+            if (!ensure_canvas_dimensions(streams[i].vctx->width,
+                                          streams[i].vctx->height,
+                                          placeholder_dimensions)) {
+              std::cerr << "Failed to resize canvas during reload (all)."
+                        << "\n";
+            } else {
+              GRID_LOG("Canvas resized: " << canvas_w << "x" << canvas_h
+                                          << " (cell: " << single_w << "x"
+                                          << single_h << ")");
+            }
+          }
+          streams_to_restart.push_back(i);
+          if (i == 0) {
+            stream0_reopened = true;
+          }
+        }
+
+        if (stream_count == 0) {
+          placeholder_dimensions = true;
+          GRID_LOG("No streams remaining, using placeholder dimensions");
+        }
+
+        GRID_LOG("Reload complete: stream_count="
+                 << stream_count << ", streams_to_restart.size()="
+                 << streams_to_restart.size());
+
+        if (need_audio_reset && stream0_reopened && stream_count > 0) {
+          if (!configure_audio(streams[0])) {
+            std::cerr << "Failed to reconfigure audio\n";
+          }
+        }
+        for (int idx : streams_to_restart) {
+          start_stream_worker(idx);
+        }
+      } else if (reload_stream_requested >= 0 &&
+                 reload_stream_requested < stream_count) {
+        int idx = reload_stream_requested;
+
+        // Stop worker thread and release stream resources before reloading
+        VideoStreamCtx &stream = streams[idx];
+        if (stream.worker.joinable()) {
+          stream.worker_stop.store(true);
+          stream.worker.join();
+        }
+        release_stream(stream);
+
+        clear_canvas_slot(idx);
+
+        // Use async_open_stream to avoid blocking the main thread during
+        // reconnection
+        async_open_stream(idx, stream_urls[idx], idx == 0);
+      }
+
+      if (need_audio_reset && audio_device_open) {
+        SDL_PauseAudio(0);
+      }
+
+      reload_all_requested = false;
+      reload_stream_requested = -1;
+    }
+
+    if (texture && !canvas_buffer.empty() && canvas_linesize[0] > 0) {
+      auto upload_start = std::chrono::steady_clock::now();
+      SDL_UpdateTexture(texture, nullptr, canvas_buffer.data(),
+                        canvas_linesize[0]);
+      auto upload_end = std::chrono::steady_clock::now();
+      auto upload_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                           upload_end - upload_start)
+                           .count();
+
+      PERF_LOG("Texture upload: " << upload_ms << "ms (canvas: " << canvas_w
+                                  << "x" << canvas_h << ")"
+                                  << (upload_ms > 5 ? " (SLOW!)" : ""));
+    }
+
+    SDL_RenderClear(renderer);
+    if (fullscreen_view && fullscreen_stream >= 0 &&
+        fullscreen_stream < stream_count) {
+      int out_w = 0;
+      int out_h = 0;
+      if (SDL_GetRendererOutputSize(renderer, &out_w, &out_h) == 0 &&
+          out_w > 0 && out_h > 0) {
+        SDL_Rect src{(fullscreen_stream % GRID_COLS) * single_w,
+                     (fullscreen_stream / GRID_COLS) * single_h, single_w,
+                     single_h};
+        SDL_Rect dst{0, 0, out_w, out_h};
+        SDL_RenderCopy(renderer, texture, &src, &dst);
+      } else {
+        SDL_RenderCopy(renderer, texture, nullptr, nullptr);
+      }
+    } else {
+      SDL_RenderCopy(renderer, texture, nullptr, nullptr);
+
+      if (effective_hovered_stream >= 0) {
+        int out_w = 0;
+        int out_h = 0;
+        if (SDL_GetRendererOutputSize(renderer, &out_w, &out_h) == 0 &&
+            out_w > 0 && out_h > 0) {
+          int cell_w = out_w / GRID_COLS;
+          int cell_h = out_h / GRID_ROWS;
+          SDL_Rect overlay{(effective_hovered_stream % GRID_COLS) * cell_w,
+                           (effective_hovered_stream / GRID_COLS) * cell_h,
+                           cell_w, cell_h};
+          SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+          SDL_SetRenderDrawColor(renderer, 0, 0, 0, 96);
+          SDL_RenderFillRect(renderer, &overlay);
+          SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+        }
+      }
+    }
+
+    ImGui::Render();
+    ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData(), renderer);
+
+    SDL_RenderPresent(renderer);
+
+    SDL_Delay(1);
+
+#ifdef DEBUG_LOGGING
+    std::cerr << "[diag] end of iteration quit flag: " << quit << "\n";
+#endif
+  }
+
+  if (audio_device_open) {
+    SDL_CloseAudio();
+    audio_device_open = false;
+  }
+  if (swr) {
+    swr_free(&swr);
+    swr = nullptr;
+  }
+
+  for (auto &stream : streams) {
+    release_stream(stream);
+  }
+
+  ImGui_ImplSDLRenderer2_Shutdown();
+  ImGui_ImplSDL2_Shutdown();
+  ImGui::DestroyContext();
+
+  if (texture) {
+    SDL_DestroyTexture(texture);
+    texture = nullptr;
+  }
+  if (motion_frame_texture) {
+    SDL_DestroyTexture(motion_frame_texture);
+    motion_frame_texture = nullptr;
+  }
+  if (renderer) {
+    SDL_DestroyRenderer(renderer);
+    renderer = nullptr;
+  }
+  if (win) {
+    SDL_DestroyWindow(win);
+    win = nullptr;
+  }
+
+  SDL_Quit();
+  avformat_network_deinit();
+
+  return 0;
 }

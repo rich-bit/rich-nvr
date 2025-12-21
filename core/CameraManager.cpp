@@ -5,10 +5,10 @@
 #include <filesystem>
 #include <fstream>
 #include <gst/gst.h>
-#include <optional>
 #include <gst/rtsp-server/rtsp-server.h>
 #include <iostream>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <sstream>
 #include <thread>
 using nlohmann::json;
@@ -18,14 +18,14 @@ CameraManager::CameraManager(Settings &settings)
   gst_init(nullptr, nullptr);
 
   // Check for CONFIG_PATH environment variable
-  const char* env_config_path = std::getenv("CONFIG_PATH");
+  const char *env_config_path = std::getenv("CONFIG_PATH");
   if (env_config_path && *env_config_path) {
     config_path_ = env_config_path;
   } else {
     std::string exe_dir = core::PathUtils::getExecutableDir();
     config_path_ = exe_dir + "/cameras.json";
   }
-  
+
   loadCamerasFromJSON(config_path_);
 }
 
@@ -101,8 +101,7 @@ void CameraManager::addCamera(
       video_output_format);
 
   if (audio_hint) {
-    cam->setAudioHint(
-        *audio_hint);
+    cam->setAudioHint(*audio_hint);
   }
 
   cam->start();
@@ -185,7 +184,8 @@ void CameraManager::saveCamerasToJSON(const std::string &filename) {
   }
 }
 
-void CameraManager::saveSingleCameraToJSON(const std::string &filename, const std::string &cameraName) {
+void CameraManager::saveSingleCameraToJSON(const std::string &filename,
+                                           const std::string &cameraName) {
   // Load existing JSON
   nlohmann::json j;
   std::ifstream inFile(filename);
@@ -193,7 +193,8 @@ void CameraManager::saveSingleCameraToJSON(const std::string &filename, const st
     try {
       inFile >> j;
     } catch (...) {
-      std::cerr << "Error reading existing cameras.json, creating new one" << std::endl;
+      std::cerr << "Error reading existing cameras.json, creating new one"
+                << std::endl;
       j = nlohmann::json::object();
     }
     inFile.close();
@@ -207,7 +208,8 @@ void CameraManager::saveSingleCameraToJSON(const std::string &filename, const st
   // Find the camera to update
   auto it = cameras_.find(cameraName);
   if (it == cameras_.end()) {
-    std::cerr << "Camera '" << cameraName << "' not found for JSON update" << std::endl;
+    std::cerr << "Camera '" << cameraName << "' not found for JSON update"
+              << std::endl;
     return;
   }
 
@@ -277,7 +279,8 @@ void CameraManager::saveSingleCameraToJSON(const std::string &filename, const st
   std::ofstream outFile(filename);
   if (outFile) {
     outFile << j.dump(2) << std::endl;
-    std::cout << "Camera '" << cameraName << "' saved to " << filename << std::endl;
+    std::cout << "Camera '" << cameraName << "' saved to " << filename
+              << std::endl;
   } else {
     std::cerr << "Failed to write " << filename << std::endl;
   }
@@ -286,25 +289,29 @@ void CameraManager::saveSingleCameraToJSON(const std::string &filename, const st
 void CameraManager::loadCamerasFromJSON(const std::string &filename) {
   std::ifstream f(filename);
   if (!f.is_open()) {
-    std::cout << "[CameraManager] cameras.json not found at: " << filename << std::endl;
-    std::cout << "[CameraManager] Creating new empty cameras.json..." << std::endl;
-    
+    std::cout << "[CameraManager] cameras.json not found at: " << filename
+              << std::endl;
+    std::cout << "[CameraManager] Creating new empty cameras.json..."
+              << std::endl;
+
     // Create parent directory if it doesn't exist
     std::filesystem::path file_path(filename);
     if (file_path.has_parent_path()) {
       std::filesystem::create_directories(file_path.parent_path());
     }
-    
+
     // Create empty cameras array
     nlohmann::json j;
     j["cameras"] = nlohmann::json::array();
-    
+
     std::ofstream out(filename);
     if (out) {
       out << j.dump(2) << std::endl;
-      std::cout << "[CameraManager] Created empty cameras.json at: " << filename << std::endl;
+      std::cout << "[CameraManager] Created empty cameras.json at: " << filename
+                << std::endl;
     } else {
-      std::cerr << "[CameraManager] Warning: Could not create cameras.json at: " << filename << std::endl;
+      std::cerr << "[CameraManager] Warning: Could not create cameras.json at: "
+                << filename << std::endl;
     }
     return;
   }
@@ -313,7 +320,8 @@ void CameraManager::loadCamerasFromJSON(const std::string &filename) {
   try {
     f >> j;
   } catch (...) {
-    std::cerr << "[CameraManager] Error reading/parsing cameras.json!" << std::endl;
+    std::cerr << "[CameraManager] Error reading/parsing cameras.json!"
+              << std::endl;
     return;
   }
 
@@ -386,9 +394,10 @@ void CameraManager::loadCamerasFromJSON(const std::string &filename) {
                   motion_arrow_thickness, video_output_format,
                   have_audio_hint ? std::optional<AudioProbeResult>{audio_hint}
                                   : std::nullopt);
-        
+
         // Load motion regions after camera is added
-        if (entry.contains("motion_regions") && entry["motion_regions"].is_array()) {
+        if (entry.contains("motion_regions") &&
+            entry["motion_regions"].is_array()) {
           for (const auto &region_json : entry["motion_regions"]) {
             int x = region_json.value("x", 0);
             int y = region_json.value("y", 0);
@@ -525,28 +534,36 @@ nlohmann::json CameraManager::getCamerasInfoJson() const {
   return arr;
 }
 
-int CameraManager::addMotionRegionToCamera(const std::string &cameraId, const cv::Rect &region, float angle) {
+int CameraManager::addMotionRegionToCamera(const std::string &cameraId,
+                                           const cv::Rect &region,
+                                           float angle) {
   auto it = cameras_.find(cameraId);
   if (it == cameras_.end()) {
-    std::cout << "[CameraManager] Camera '" << cameraId << "' not found for motion region" << std::endl;
+    std::cout << "[CameraManager] Camera '" << cameraId
+              << "' not found for motion region" << std::endl;
     return -1;
   }
-  
+
   int regionId = it->second->addMotionRegion(region, angle);
-  std::cout << "[CameraManager] Added motion region " << regionId << " to camera '" << cameraId << "' with angle " << angle << "°" << std::endl;
+  std::cout << "[CameraManager] Added motion region " << regionId
+            << " to camera '" << cameraId << "' with angle " << angle << "°"
+            << std::endl;
   return regionId;
 }
 
-bool CameraManager::removeMotionRegionFromCamera(const std::string &cameraId, int regionId) {
+bool CameraManager::removeMotionRegionFromCamera(const std::string &cameraId,
+                                                 int regionId) {
   auto it = cameras_.find(cameraId);
   if (it == cameras_.end()) {
-    std::cout << "[CameraManager] Camera '" << cameraId << "' not found for motion region removal" << std::endl;
+    std::cout << "[CameraManager] Camera '" << cameraId
+              << "' not found for motion region removal" << std::endl;
     return false;
   }
-  
+
   bool success = it->second->removeMotionRegion(regionId);
   if (success) {
-    std::cout << "[CameraManager] Removed motion region " << regionId << " from camera '" << cameraId << "'" << std::endl;
+    std::cout << "[CameraManager] Removed motion region " << regionId
+              << " from camera '" << cameraId << "'" << std::endl;
   }
   return success;
 }
@@ -554,20 +571,24 @@ bool CameraManager::removeMotionRegionFromCamera(const std::string &cameraId, in
 void CameraManager::clearMotionRegionsFromCamera(const std::string &cameraId) {
   auto it = cameras_.find(cameraId);
   if (it == cameras_.end()) {
-    std::cout << "[CameraManager] Camera '" << cameraId << "' not found for motion region clearing" << std::endl;
+    std::cout << "[CameraManager] Camera '" << cameraId
+              << "' not found for motion region clearing" << std::endl;
     return;
   }
-  
+
   it->second->clearMotionRegions();
-  std::cout << "[CameraManager] Cleared all motion regions from camera '" << cameraId << "'" << std::endl;
+  std::cout << "[CameraManager] Cleared all motion regions from camera '"
+            << cameraId << "'" << std::endl;
 }
 
-std::vector<MotionRegion> CameraManager::getMotionRegionsFromCamera(const std::string &cameraId) const {
+std::vector<MotionRegion>
+CameraManager::getMotionRegionsFromCamera(const std::string &cameraId) const {
   auto it = cameras_.find(cameraId);
   if (it == cameras_.end()) {
-    std::cout << "[CameraManager] Camera '" << cameraId << "' not found for getting motion regions" << std::endl;
+    std::cout << "[CameraManager] Camera '" << cameraId
+              << "' not found for getting motion regions" << std::endl;
     return {};
   }
-  
+
   return it->second->getMotionRegions();
 }

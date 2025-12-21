@@ -30,7 +30,7 @@ public:
                  int motion_min_hits, int motion_decay,
                  float motion_arrow_scale, int motion_arrow_thickness,
                  std::string video_output_format,
-                std::optional<AudioProbeResult> audio_hint = std::nullopt);
+                 std::optional<AudioProbeResult> audio_hint = std::nullopt);
 
   std::vector<std::string> getCameraNames() const;
 
@@ -42,13 +42,16 @@ public:
   nlohmann::json getCamerasInfoJson() const;
 
   // Motion region management
-  int addMotionRegionToCamera(const std::string &cameraId, const cv::Rect &region, float angle = 0.0f);
+  int addMotionRegionToCamera(const std::string &cameraId,
+                              const cv::Rect &region, float angle = 0.0f);
   bool removeMotionRegionFromCamera(const std::string &cameraId, int regionId);
   void clearMotionRegionsFromCamera(const std::string &cameraId);
-  std::vector<MotionRegion> getMotionRegionsFromCamera(const std::string &cameraId) const;
+  std::vector<MotionRegion>
+  getMotionRegionsFromCamera(const std::string &cameraId) const;
 
   // Save camera settings to JSON
-  void saveSingleCameraToJSON(const std::string &filename, const std::string &cameraName);
+  void saveSingleCameraToJSON(const std::string &filename,
+                              const std::string &cameraName);
 
 private:
   std::map<std::string, std::unique_ptr<CameraStream>> cameras_;
@@ -58,7 +61,7 @@ private:
   Settings &settings_;
   // Live555 RTSP proxy server
   live555RtspProxy live555_proxy_;
-  uint16_t live555_port_ = 8554;   // optional: expose/configure elsewhere
+  uint16_t live555_port_ = 8554; // optional: expose/configure elsewhere
   std::string live555_bind_host_ = "127.0.0.1";
 
   void saveCamerasToJSON(const std::string &filename);

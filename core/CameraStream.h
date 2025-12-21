@@ -20,14 +20,15 @@ struct MotionRegion {
   int id;
   cv::Rect rect;
   float angle;
-  
-  MotionRegion(int id, const cv::Rect& rect, float angle = 0.0f) 
-    : id(id), rect(rect), angle(angle) {}
-  
+
+  MotionRegion(int id, const cv::Rect &rect, float angle = 0.0f)
+      : id(id), rect(rect), angle(angle) {}
+
   // Get rotated rectangle for point-in-region testing
   cv::RotatedRect getRotatedRect() const {
-    return cv::RotatedRect(cv::Point2f(rect.x + rect.width/2.0f, rect.y + rect.height/2.0f),
-                          cv::Size2f(rect.width, rect.height), angle);
+    return cv::RotatedRect(
+        cv::Point2f(rect.x + rect.width / 2.0f, rect.y + rect.height / 2.0f),
+        cv::Size2f(rect.width, rect.height), angle);
   }
 };
 
@@ -42,10 +43,10 @@ public:
                int segment_bitrate_ = 2000,
                std::string segment_speed_preset_ = "veryfast",
                cv::Size motion_frame_size = cv::Size(0, 0),
-               float motion_frame_scale = 1.0f,
-               float noise_threshold = 0.0f, float motion_threshold = 0.0f,
-               int motion_min_hits = 1, int motion_decay = 0,
-               float motion_arrow_scale = 2.5f, int motion_arrow_thickness = 1,
+               float motion_frame_scale = 1.0f, float noise_threshold = 0.0f,
+               float motion_threshold = 0.0f, int motion_min_hits = 1,
+               int motion_decay = 0, float motion_arrow_scale = 2.5f,
+               int motion_arrow_thickness = 1,
                std::string video_output_format = "mp4");
 
   ~CameraStream();
@@ -118,10 +119,12 @@ public:
   }
 
   // Motion region management
-  int addMotionRegion(const cv::Rect& rect, float angle = 0.0f);
+  int addMotionRegion(const cv::Rect &rect, float angle = 0.0f);
   bool removeMotionRegion(int id);
   void clearMotionRegions();
-  const std::vector<MotionRegion>& getMotionRegions() const { return motion_regions_; }
+  const std::vector<MotionRegion> &getMotionRegions() const {
+    return motion_regions_;
+  }
 
 private:
   std::string buildPipelineWithAudio() const;

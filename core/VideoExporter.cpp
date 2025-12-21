@@ -72,21 +72,14 @@ bool VideoExporter::exportSegments(
 
   // Build ffmpeg args
   QStringList args;
-  args << "-y"
-       << "-f"
-       << "concat"
-       << "-safe"
-       << "0"
-       << "-i"
+  args << "-y" << "-f" << "concat" << "-safe" << "0" << "-i"
        << QString::fromStdString(listFile.string())
        // Force Matroska on output if extension is .mkv (optional but explicit)
-       << "-c"
-       << "copy";
+       << "-c" << "copy";
 
   fs::path outputPath = outputFolder / outputFilename;
   if (fs::path(outputFilename).extension() == ".mkv") {
-    args << "-f"
-         << "matroska";
+    args << "-f" << "matroska";
   }
   args << QString::fromStdString(outputPath.string());
 

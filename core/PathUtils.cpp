@@ -1,7 +1,7 @@
 #include "PathUtils.h"
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
-#include <cstdlib>
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -59,12 +59,12 @@ bool PathUtils::isWSLEnvironment() {
   if (versionFile.is_open()) {
     std::string version;
     std::getline(versionFile, version);
-    if (version.find("WSL") != std::string::npos || 
+    if (version.find("WSL") != std::string::npos ||
         version.find("Microsoft") != std::string::npos) {
       return true;
     }
   }
-  return std::getenv("WSL_DISTRO_NAME") != nullptr || 
+  return std::getenv("WSL_DISTRO_NAME") != nullptr ||
          std::getenv("WSLENV") != nullptr;
 }
 
