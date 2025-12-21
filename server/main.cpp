@@ -3,15 +3,41 @@
 #include "httplib.h"
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <iostream>
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <opencv2/core/types.hpp>
 #include <signal.h>
+#include <string>
 #include <thread>
 
 using Clock = std::chrono::steady_clock;
 using nlohmann::json;
+
+// Helper function to translate localhost to host.docker.internal when running
+// in Docker
+std::string translateDockerUri(const std::string &uri) {
+  // Check if running in Docker by looking for DOCKER_CONTAINER env var
+  const char *docker_env = std::getenv("DOCKER_CONTAINER");
+  if (docker_env && std::string(docker_env) == "true") {
+    // Replace localhost with host.docker.internal
+    std::string result = uri;
+    size_t pos = 0;
+    while ((pos = result.find("://localhost:", pos)) != std::string::npos) {
+      result.replace(pos, 13, "://host.docker.internal:");
+      pos += 24; // Length of "://host.docker.internal:"
+    }
+    // Also handle rtsp://localhost/ (without port)
+    pos = 0;
+    while ((pos = result.find("://localhost/", pos)) != std::string::npos) {
+      result.replace(pos, 13, "://host.docker.internal/");
+      pos += 24;
+    }
+    return result;
+  }
+  return uri;
+}
 
 // Global shutdown flag for signal handling
 std::atomic<bool> *g_shutdownRequested = nullptr;
@@ -122,6 +148,9 @@ int main() {
                               httplib::Response &res) {
     auto name = req.get_param_value("name");
     auto uri = req.get_param_value("uri");
+
+    // Translate localhost to host.docker.internal when running in Docker
+    uri = translateDockerUri(uri);
 
     auto param_to_bool = [&](const std::string &key) {
       if (!req.has_param(key))

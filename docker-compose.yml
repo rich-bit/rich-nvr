@@ -9,6 +9,7 @@ services:
     environment:
       - TZ=UTC
       - CONFIG_PATH=/config/cameras.json
+      - DOCKER_CONTAINER=true
     ports:
       - "8080:8080"   # HTTP API
       - "8554:8554"   # RTSP proxy
@@ -18,6 +19,8 @@ services:
     restart: unless-stopped
     networks:
       - nvr-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
   nvrclient:
     build:
