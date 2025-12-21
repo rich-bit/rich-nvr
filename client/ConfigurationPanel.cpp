@@ -1,5 +1,6 @@
 #include "ConfigurationPanel.h"
 #include "ClientNetworking.h"
+#include "ClientConfig.h"
 
 #include <algorithm>
 #include <cmath>
@@ -77,6 +78,7 @@ ConfigurationPanel::ConfigurationPanel(ConfigurationWindowSettings &window_setti
       add_camera_motion_decay_(20),
       add_camera_motion_arrow_scale_(1.0f),
       add_camera_motion_arrow_thickness_(2),
+      add_camera_limit_frame_rate_(true),
       add_camera_status_success_(false),
       server_health_checking_(false),
       server_health_available_(false),
@@ -114,7 +116,10 @@ ConfigurationPanel::ConfigurationPanel(ConfigurationWindowSettings &window_setti
       motion_frame_fetch_interval_(1.0f),
       server_thread_info_fetch_in_progress_(false),
       last_server_thread_info_fetch_(0.0f),
-      server_check_interval_(5.0f)
+      server_check_interval_(5.0f),
+      rtsp_config_stream_index_(-1),
+      show_rtsp_config_popup_(false),
+      rtsp_config_temp_(std::make_unique<client_config::CameraConfig>())
 {
     // Create dedicated worker thread for motion frame fetching
     // This prevents motion frame updates from being delayed by other async tasks
@@ -277,6 +282,225 @@ void ConfigurationPanel::setThreadInfoCallback(ThreadInfoCallback callback)
     thread_info_callback_ = std::move(callback);
 }
 
+void ConfigurationPanel::setRTSPConfigCallbacks(GetRTSPConfigCallback get_callback,
+                                                SaveRTSPConfigCallback save_callback,
+                                                ReloadStreamCallback reload_callback)
+{
+    get_rtsp_config_callback_ = std::move(get_callback);
+    save_rtsp_config_callback_ = std::move(save_callback);
+    reload_stream_callback_ = std::move(reload_callback);
+}
+
+void ConfigurationPanel::requestRTSPConfig(int stream_index)
+{
+    rtsp_config_stream_index_ = stream_index;
+    show_rtsp_config_popup_ = true;
+    
+    // Store camera name for display
+    auto cameras = get_cameras_callback_();
+    if (stream_index >= 0 && stream_index < static_cast<int>(cameras.size()))
+    {
+        rtsp_config_camera_name_ = cameras[stream_index].name;
+    }
+    else
+    {
+        rtsp_config_camera_name_ = "Unknown Camera";
+    }
+}
+
+void ConfigurationPanel::renderRTSPConfigPopup()
+{
+    if (!show_rtsp_config_popup_)
+        return;
+    
+    ImGui::OpenPopup("RTSP Stream Configuration");
+    
+    ImVec2 center = ImGui::GetMainViewport()->GetCenter();
+    ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(550, 650), ImGuiCond_Appearing);
+    
+    if (ImGui::BeginPopupModal("RTSP Stream Configuration", &show_rtsp_config_popup_,
+                               ImGuiWindowFlags_NoSavedSettings))
+    {
+        // Determine if we're in Add Camera mode (stream_index == -1) or editing existing stream
+        bool is_add_camera_mode = (rtsp_config_stream_index_ == -1);
+        
+        // Get reference to config (use temp for Add Camera mode, or callback for existing stream)
+        client_config::CameraConfig* config_ptr = nullptr;
+        if (is_add_camera_mode)
+        {
+            config_ptr = rtsp_config_temp_.get();
+        }
+        else if (get_rtsp_config_callback_)
+        {
+            config_ptr = &get_rtsp_config_callback_(rtsp_config_stream_index_);
+        }
+        else
+        {
+            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Error: RTSP config callbacks not set");
+            if (ImGui::Button("Close"))
+            {
+                show_rtsp_config_popup_ = false;
+            }
+            ImGui::EndPopup();
+            return;
+        }
+        
+        auto& config = *config_ptr;
+        
+        ImGui::Text("Camera: %s", rtsp_config_camera_name_.c_str());
+        ImGui::Separator();
+        ImGui::Spacing();
+        
+        ImGui::SeparatorText("Connection Settings");
+        
+        const char* transport_options[] = { "TCP", "UDP" };
+        int transport_idx = (config.rtsp_transport == "udp") ? 1 : 0;
+        if (ImGui::Combo("Transport Protocol", &transport_idx, transport_options, 2))
+        {
+            config.rtsp_transport = (transport_idx == 1) ? "udp" : "tcp";
+        }
+        ImGui::TextWrapped("TCP: More reliable, higher latency. UDP: Lower latency, may drop packets.");
+        ImGui::Spacing();
+        
+        ImGui::SliderInt("Timeout (seconds)", &config.rtsp_timeout_seconds, 1, 30);
+        ImGui::TextWrapped("How long to wait for connection/read operations before giving up.");
+        ImGui::Spacing();
+        
+        ImGui::SliderInt("Max Delay (ms)", &config.max_delay_ms, 100, 5000);
+        ImGui::TextWrapped("Maximum demuxing delay. Lower = less latency, higher = more buffering.");
+        ImGui::Spacing();
+        
+        ImGui::SliderInt("Buffer Size (KB)", &config.buffer_size_kb, 128, 8192);
+        ImGui::TextWrapped("Network receive buffer size. Increase for unstable connections.");
+        ImGui::Spacing();
+        
+        ImGui::SeparatorText("Performance Tuning");
+        
+        ImGui::Checkbox("Low Latency Mode", &config.low_latency);
+        ImGui::TextWrapped("Skip B-frames and reduce buffering for lowest possible latency.");
+        ImGui::Spacing();
+        
+        ImGui::Checkbox("Disable Internal Buffering", &config.fflags_nobuffer);
+        ImGui::TextWrapped("Disable FFmpeg's internal buffering. Usually faster but may be unstable.");
+        ImGui::Spacing();
+        
+        ImGui::SliderInt("Probe Size (KB)", &config.probesize_kb, 100, 10000);
+        ImGui::TextWrapped("How much data to analyze when opening stream. Lower = faster connect.");
+        ImGui::Spacing();
+        
+        ImGui::SliderInt("Analyze Duration (ms)", &config.analyzeduration_ms, 100, 10000);
+        ImGui::TextWrapped("How long to analyze stream when opening. Lower = faster connect.");
+        ImGui::Spacing();
+        
+        ImGui::SeparatorText("Hardware Acceleration");
+        
+        const char* hwaccel_options[] = { "None (Software)", "Auto", "CUDA (NVIDIA)", "D3D11VA (Windows)", "VAAPI (Linux)" };
+        const char* hwaccel_values[] = { "", "auto", "cuda", "d3d11va", "vaapi" };
+        int hwaccel_idx = 0;
+        for (int i = 0; i < 5; i++)
+        {
+            if (config.hwaccel == hwaccel_values[i])
+            {
+                hwaccel_idx = i;
+                break;
+            }
+        }
+        if (ImGui::Combo("Hardware Decoder", &hwaccel_idx, hwaccel_options, 5))
+        {
+            config.hwaccel = hwaccel_values[hwaccel_idx];
+        }
+        ImGui::TextWrapped("Use GPU for video decoding. May not work on all systems.");
+        ImGui::Spacing();
+        
+        ImGui::SeparatorText("Quick Presets");
+        
+        if (ImGui::Button("Low Latency (UDP)", ImVec2(160, 0)))
+        {
+            config.rtsp_transport = "udp";
+            config.max_delay_ms = 100;
+            config.buffer_size_kb = 512;
+            config.fflags_nobuffer = true;
+            config.low_latency = true;
+            config.probesize_kb = 500;
+            config.analyzeduration_ms = 500;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Low Latency (TCP)", ImVec2(160, 0)))
+        {
+            config.rtsp_transport = "tcp";
+            config.max_delay_ms = 100;
+            config.buffer_size_kb = 512;
+            config.fflags_nobuffer = true;
+            config.low_latency = true;
+            config.probesize_kb = 500;
+            config.analyzeduration_ms = 500;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Stable (TCP)", ImVec2(160, 0)))
+        {
+            config.rtsp_transport = "tcp";
+            config.max_delay_ms = 500;
+            config.buffer_size_kb = 2048;
+            config.fflags_nobuffer = true;
+            config.low_latency = false;
+            config.probesize_kb = 1000;
+            config.analyzeduration_ms = 1000;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Reset to Defaults", ImVec2(160, 0)))
+        {
+            config.rtsp_transport = "tcp";
+            config.rtsp_timeout_seconds = 5;
+            config.max_delay_ms = 500;
+            config.buffer_size_kb = 1024;
+            config.rtsp_flags_prefer_tcp = true;
+            config.fflags_nobuffer = true;
+            config.probesize_kb = 1000;
+            config.analyzeduration_ms = 1000;
+            config.low_latency = false;
+            config.thread_count = 0;
+            config.hwaccel = "";
+        }
+        
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+        
+        // Different button text based on mode
+        const char* save_button_text = is_add_camera_mode ? "Save Settings" : "Save & Reload Stream";
+        
+        if (ImGui::Button(save_button_text, ImVec2(200, 0)))
+        {
+            if (is_add_camera_mode)
+            {
+                // In Add Camera mode, just close the popup (settings are saved in rtsp_config_temp_)
+                show_rtsp_config_popup_ = false;
+            }
+            else
+            {
+                // For existing streams, save to config and reload
+                if (save_rtsp_config_callback_)
+                {
+                    save_rtsp_config_callback_();
+                }
+                if (reload_stream_callback_)
+                {
+                    reload_stream_callback_(rtsp_config_stream_index_);
+                }
+                show_rtsp_config_popup_ = false;
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(120, 0)))
+        {
+            show_rtsp_config_popup_ = false;
+        }
+        
+        ImGui::EndPopup();
+    }
+}
+
 void ConfigurationPanel::renderGeneralTab(bool set_selected)
 {
     ImGuiTabItemFlags flags = set_selected ? ImGuiTabItemFlags_SetSelected : 0;
@@ -346,6 +570,27 @@ void ConfigurationPanel::renderAddCameraTab(bool set_selected)
             last_probe_result_ = ProbeStreamResult();
             proxy_probe_in_progress_ = false;
             last_proxy_probe_time_ = 0.0f;
+        }
+        
+        // Show "More stream settings" button for direct connections only
+        if (!add_camera_via_server_)
+        {
+            if (ImGui::Button("More stream settings"))
+            {
+                // Open RTSP config popup for stream index -1 (add camera mode)
+                requestRTSPConfig(-1);
+            }
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("Configure RTSP transport, timeouts, buffering, and hardware acceleration");
+            }
+        }
+        
+        // Show frame rate limiting checkbox for ALL cameras (both direct and via-server)
+        ImGui::Checkbox("Limit frame rate to stream's native FPS", &add_camera_limit_frame_rate_);
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Prevents video from playing too fast and improves A/V sync.\nRecommended: enabled (default) for smooth playback.");
         }
         
         // Probe stream button (only for direct connections)
@@ -576,6 +821,7 @@ void ConfigurationPanel::renderAddCameraTab(bool set_selected)
                     request.motion_decay = add_camera_motion_decay_;
                     request.motion_arrow_scale = add_camera_motion_arrow_scale_;
                     request.motion_arrow_thickness = add_camera_motion_arrow_thickness_;
+                    request.limit_frame_rate = add_camera_limit_frame_rate_;
                     
                     async_worker_->enqueueTask([this, request]() {
                         std::string response_body;
@@ -661,6 +907,7 @@ void ConfigurationPanel::renderAddCameraTab(bool set_selected)
                 request.motion_decay = add_camera_motion_decay_;
                 request.motion_arrow_scale = add_camera_motion_arrow_scale_;
                 request.motion_arrow_thickness = add_camera_motion_arrow_thickness_;
+                request.limit_frame_rate = add_camera_limit_frame_rate_;
 
                 auto result = add_camera_callback_(request);
                 add_camera_status_success_ = result.success;

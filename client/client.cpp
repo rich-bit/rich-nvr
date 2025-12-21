@@ -45,6 +45,7 @@ extern "C"
 bool g_audio_debug = false;
 bool g_grid_debug = false;
 bool g_motion_frame_debug = false;
+bool g_perf_debug = false; // Performance/decode timing debug
 
 // Shared buffer for async motion frame fetching
 std::vector<unsigned char> g_prefetched_motion_frame_jpeg;
@@ -62,28 +63,39 @@ std::mutex g_prefetched_jpeg_mutex;
     } while (0)
 
 // Grid debug logging helper
-#define GRID_LOG(msg)                                    \
-    do                                                   \
-    {                                                    \
-        if (g_grid_debug)                                \
-        {                                                \
-            std::cout << "[Grid] " << msg << std::endl;  \
-        }                                                \
+#define GRID_LOG(msg)                                   \
+    do                                                  \
+    {                                                   \
+        if (g_grid_debug)                               \
+        {                                               \
+            std::cout << "[Grid] " << msg << std::endl; \
+        }                                               \
     } while (0)
 
 // Motion-frame debug logging helper with timestamp
-#define MOTION_FRAME_LOG(msg)                                                          \
-    do                                                                                 \
-    {                                                                                  \
-        if (g_motion_frame_debug)                                                      \
-        {                                                                              \
-            auto now = std::chrono::steady_clock::now();                               \
-            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(           \
-                now.time_since_epoch()).count();                                       \
-            double seconds = (ms % 100000) / 1000.0;                                   \
-            std::cout << "[MotionFrame][" << std::fixed << std::setprecision(3)        \
-                      << seconds << "s] " << msg << std::endl;                         \
-        }                                                                              \
+#define MOTION_FRAME_LOG(msg)                                                   \
+    do                                                                          \
+    {                                                                           \
+        if (g_motion_frame_debug)                                               \
+        {                                                                       \
+            auto now = std::chrono::steady_clock::now();                        \
+            auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(    \
+                          now.time_since_epoch())                               \
+                          .count();                                             \
+            double seconds = (ms % 100000) / 1000.0;                            \
+            std::cout << "[MotionFrame][" << std::fixed << std::setprecision(3) \
+                      << seconds << "s] " << msg << std::endl;                  \
+        }                                                                       \
+    } while (0)
+
+// Performance debug logging helper
+#define PERF_LOG(msg)                                   \
+    do                                                  \
+    {                                                   \
+        if (g_perf_debug)                               \
+        {                                               \
+            std::cout << "[Perf] " << msg << std::endl; \
+        }                                               \
     } while (0)
 
 namespace
@@ -217,7 +229,7 @@ namespace
     ProbeResult probe_rtsp_stream(const std::string &url, std::chrono::seconds timeout = std::chrono::seconds(5))
     {
         ProbeResult result;
-        
+
         StreamInterruptContext interrupt_ctx;
         AVFormatContext *fmt_ctx = avformat_alloc_context();
         if (!fmt_ctx)
@@ -225,7 +237,7 @@ namespace
             result.error_message = "Failed to allocate format context";
             return result;
         }
-        
+
         fmt_ctx->interrupt_callback.callback = ffmpeg_interrupt_callback;
         fmt_ctx->interrupt_callback.opaque = &interrupt_ctx;
 
@@ -233,12 +245,16 @@ namespace
         av_dict_set(&opts, "rtsp_transport", "tcp", 0);
         av_dict_set(&opts, "fflags", "nobuffer", 0);
         av_dict_set(&opts, "max_delay", "500000", 0);
-        av_dict_set(&opts, "stimeout", "5000000", 0);  // 5 second timeout
+        av_dict_set(&opts, "buffer_size", "1024000", 0);
+        av_dict_set(&opts, "rtsp_flags", "prefer_tcp", 0);
+        av_dict_set(&opts, "analyzeduration", "1000000", 0);
+        av_dict_set(&opts, "probesize", "1000000", 0);
+        av_dict_set(&opts, "stimeout", "5000000", 0); // 5 second timeout
 
         interrupt_ctx.deadline = std::chrono::steady_clock::now() + timeout;
         int open_result = avformat_open_input(&fmt_ctx, url.c_str(), nullptr, &opts);
         av_dict_free(&opts);
-        
+
         if (open_result < 0)
         {
             char errbuf[AV_ERROR_MAX_STRING_SIZE] = {};
@@ -260,7 +276,7 @@ namespace
         // Find video stream
         int video_stream_index = -1;
         int audio_stream_index = -1;
-        
+
         for (unsigned i = 0; i < fmt_ctx->nb_streams; ++i)
         {
             AVStream *st = fmt_ctx->streams[i];
@@ -351,11 +367,17 @@ int main(int argc, char **argv)
                 g_grid_debug = true;
                 std::cout << "[Debug] Grid debugging enabled" << std::endl;
             }
+            else if (debug_type == "perf")
+            {
+                g_perf_debug = true;
+                std::cout << "[Debug] Performance debugging enabled" << std::endl;
+            }
             else if (debug_type == "all")
             {
                 g_audio_debug = true;
                 g_grid_debug = true;
                 g_motion_frame_debug = true;
+                g_perf_debug = true;
                 std::cout << "[Debug] All debugging enabled" << std::endl;
             }
             else if (debug_type == "motion-frame")
@@ -366,7 +388,7 @@ int main(int argc, char **argv)
             else
             {
                 std::cerr << "Unknown debug type: " << debug_type << std::endl;
-                std::cerr << "Available types: audio, grid, motion-frame, all" << std::endl;
+                std::cerr << "Available types: audio, grid, motion-frame, perf, all" << std::endl;
             }
         }
         else if (arg.find("rtsp://") == 0)
@@ -377,15 +399,18 @@ int main(int argc, char **argv)
 
     std::vector<CameraConfig> stream_configs;
     std::filesystem::path config_path;
-    
+
     // Check for CONFIG_PATH environment variable
-    const char* env_config_path = std::getenv("CONFIG_PATH");
-    if (env_config_path && *env_config_path) {
+    const char *env_config_path = std::getenv("CONFIG_PATH");
+    if (env_config_path && *env_config_path)
+    {
         config_path = env_config_path;
-    } else {
+    }
+    else
+    {
         config_path = resolve_config_path(argv[0]);
     }
-    
+
     nlohmann::json client_config_json = nlohmann::json::object();
     ClientConfig client_config;
     bool config_loaded = false;
@@ -474,7 +499,7 @@ int main(int argc, char **argv)
         stream_urls[i] = stream_configs[i].ip;
         stream_names[i] = stream_configs[i].name.empty() ? kUnknownCameraName : stream_configs[i].name;
     }
-    
+
     GRID_LOG("Initial config: stream_count=" << stream_count << ", GRID_COLS=" << GRID_COLS << ", GRID_ROWS=" << GRID_ROWS);
 
     ConfigurationWindowSettings window_settings = client_config.window_settings;
@@ -596,11 +621,11 @@ int main(int argc, char **argv)
     auto release_stream = [&](VideoStreamCtx &s)
     {
         stop_stream_worker(s);
-        
+
         // Stop any async open in progress by setting abort flag
         s.interrupt_ctx.abort = true;
         s.async_open_in_progress.store(false);
-        
+
         s.interrupt_ctx.deadline = std::chrono::steady_clock::time_point{};
         if (s.pkt)
         {
@@ -781,10 +806,38 @@ int main(int argc, char **argv)
         s.fmt_ctx->interrupt_callback.callback = ffmpeg_interrupt_callback;
         s.fmt_ctx->interrupt_callback.opaque = &s.interrupt_ctx;
 
+        // Apply camera-specific RTSP settings
+        const CameraConfig& config = stream_configs[idx];
         AVDictionary *opts = nullptr;
-        av_dict_set(&opts, "rtsp_transport", "tcp", 0);
-        av_dict_set(&opts, "fflags", "nobuffer", 0);
-        av_dict_set(&opts, "max_delay", "500000", 0);
+        av_dict_set(&opts, "rtsp_transport", config.rtsp_transport.c_str(), 0);
+        if (config.fflags_nobuffer)
+        {
+            av_dict_set(&opts, "fflags", "nobuffer", 0);
+        }
+        av_dict_set(&opts, "max_delay", std::to_string(config.max_delay_ms * 1000).c_str(), 0);
+        av_dict_set(&opts, "buffer_size", std::to_string(config.buffer_size_kb * 1024).c_str(), 0);
+        if (config.rtsp_flags_prefer_tcp)
+        {
+            av_dict_set(&opts, "rtsp_flags", "prefer_tcp", 0);
+        }
+        av_dict_set(&opts, "analyzeduration", std::to_string(config.analyzeduration_ms * 1000).c_str(), 0);
+        av_dict_set(&opts, "probesize", std::to_string(config.probesize_kb * 1024).c_str(), 0);
+        av_dict_set(&opts, "stimeout", std::to_string(config.rtsp_timeout_seconds * 1000000).c_str(), 0);
+        
+        if (config.low_latency)
+        {
+            av_dict_set(&opts, "fflags", "+nobuffer+fastseek+flush_packets", 0);
+        }
+        
+        if (!config.hwaccel.empty())
+        {
+            av_dict_set(&opts, "hwaccel", config.hwaccel.c_str(), 0);
+        }
+        
+        if (config.thread_count > 0)
+        {
+            av_dict_set(&opts, "threads", std::to_string(config.thread_count).c_str(), 0);
+        }
 
         s.interrupt_ctx.deadline = std::chrono::steady_clock::now() + kStreamReadTimeout;
         if (avformat_open_input(&s.fmt_ctx, url.c_str(), nullptr, &opts) < 0)
@@ -934,12 +987,44 @@ int main(int argc, char **argv)
                                                  ? stream_names[idx]
                                                  : ("Stream " + std::to_string(idx));
 
+            // Frame rate limiting setup
+            bool limit_frame_rate = true; // Default enabled
+            if (idx < static_cast<int>(stream_configs.size())) {
+                limit_frame_rate = stream_configs[idx].limit_frame_rate;
+            }
+            
+            // Calculate target frame interval from stream's actual fps
+            double fps = 25.0; // Default fallback
+            if (worker_stream.fmt_ctx && worker_stream.video_stream_index >= 0) {
+                AVStream* av_stream = worker_stream.fmt_ctx->streams[worker_stream.video_stream_index];
+                if (av_stream->avg_frame_rate.den != 0) {
+                    fps = av_q2d(av_stream->avg_frame_rate);
+                } else if (av_stream->r_frame_rate.den != 0) {
+                    fps = av_q2d(av_stream->r_frame_rate);
+                }
+            }
+            
+            const auto target_frame_interval = std::chrono::microseconds(static_cast<int64_t>(1000000.0 / fps));
+            auto last_frame_display_time = std::chrono::steady_clock::now();
+            
+            PERF_LOG("[Stream " << idx << "] Frame rate limiting: " << (limit_frame_rate ? "ENABLED" : "DISABLED") 
+                     << " | Target FPS: " << fps << " (interval: " << (1000000.0 / fps) << "us)");
+
             while (!worker_stream.worker_stop.load())
             {
+                auto read_start = std::chrono::steady_clock::now();
+                
                 worker_stream.interrupt_ctx.abort = false;
                 worker_stream.interrupt_ctx.deadline = std::chrono::steady_clock::now() + kStreamReadTimeout;
                 int read_result = av_read_frame(worker_stream.fmt_ctx, worker_stream.pkt);
                 worker_stream.interrupt_ctx.deadline = std::chrono::steady_clock::time_point{};
+
+                auto read_end = std::chrono::steady_clock::now();
+                auto read_ms = std::chrono::duration_cast<std::chrono::milliseconds>(read_end - read_start).count();
+                
+                if (read_ms > 10) {
+                    PERF_LOG("[Stream " << idx << "] Packet read: " << read_ms << "ms (SLOW!)");
+                }
 
                 if (worker_stream.worker_stop.load())
                 {
@@ -967,9 +1052,15 @@ int main(int argc, char **argv)
 
                 if (worker_stream.pkt->stream_index == worker_stream.video_stream_index)
                 {
+                    auto decode_start = std::chrono::steady_clock::now();
                     avcodec_send_packet(worker_stream.vctx, worker_stream.pkt);
                     while (!worker_stream.worker_stop.load() && avcodec_receive_frame(worker_stream.vctx, worker_stream.vframe) == 0)
                     {
+                        auto decode_end = std::chrono::steady_clock::now();
+                        auto decode_ms = std::chrono::duration_cast<std::chrono::milliseconds>(decode_end - decode_start).count();
+                        
+                        PERF_LOG("[Stream " << idx << "] Decode: " << decode_ms << "ms" << (decode_ms > 16 ? " (SLOW!)" : ""));
+                        
                         int decoded_w = worker_stream.vframe->width > 0 ? worker_stream.vframe->width : worker_stream.vctx->width;
                         int decoded_h = worker_stream.vframe->height > 0 ? worker_stream.vframe->height : worker_stream.vctx->height;
                         AVPixelFormat decoded_fmt = worker_stream.vframe->format >= 0
@@ -1001,10 +1092,32 @@ int main(int argc, char **argv)
 
                             if (!worker_failed && worker_stream.sws && worker_stream.vframe_rgb)
                             {
+                                auto convert_start = std::chrono::steady_clock::now();
                                 sws_scale(worker_stream.sws,
                                           worker_stream.vframe->data, worker_stream.vframe->linesize,
                                           0, worker_stream.frame_height,
                                           worker_stream.vframe_rgb->data, worker_stream.vframe_rgb->linesize);
+                                auto convert_end = std::chrono::steady_clock::now();
+                                auto convert_ms = std::chrono::duration_cast<std::chrono::milliseconds>(convert_end - convert_start).count();
+                                
+                                PERF_LOG("[Stream " << idx << "] YUV->RGB: " << convert_ms << "ms (res: " << decoded_w << "x" << decoded_h << ")" << (convert_ms > 10 ? " (SLOW!)" : ""));
+                                
+                                // Frame rate limiting - wait if we're displaying frames too fast
+                                if (limit_frame_rate) {
+                                    auto now = std::chrono::steady_clock::now();
+                                    auto elapsed_since_last_frame = now - last_frame_display_time;
+                                    if (elapsed_since_last_frame < target_frame_interval) {
+                                        auto sleep_duration = target_frame_interval - elapsed_since_last_frame;
+                                        std::this_thread::sleep_for(sleep_duration);
+                                        
+                                        auto sleep_ms = std::chrono::duration_cast<std::chrono::milliseconds>(sleep_duration).count();
+                                        if (sleep_ms > 5) {
+                                            PERF_LOG("[Stream " << idx << "] Frame pacing sleep: " << sleep_ms << "ms");
+                                        }
+                                    }
+                                    last_frame_display_time = std::chrono::steady_clock::now();
+                                }
+                                
                                 worker_stream.frame_generation++;
                                 worker_stream.frame_available = true;
                             }
@@ -1083,20 +1196,20 @@ int main(int argc, char **argv)
         {
             return;
         }
-        
+
         VideoStreamCtx &s = streams[idx];
-        
+
         // Don't start another async open if one is already in progress
         if (s.async_open_in_progress.load())
         {
             return;
         }
-        
+
         s.async_open_in_progress.store(true);
-        
+
         // Create a detached thread so we don't need to manage joining
         std::thread([&, idx, url, set_reference]()
-        {
+                    {
             bool success = open_stream(idx, url, set_reference);
             
             if (success)
@@ -1123,8 +1236,8 @@ int main(int argc, char **argv)
                 schedule_stream_retry(idx, kStreamRetryInitialDelay);
             }
             
-            streams[idx].async_open_in_progress.store(false);
-        }).detach();
+            streams[idx].async_open_in_progress.store(false); })
+            .detach();
     };
 
     auto configure_audio = [&](VideoStreamCtx &audio_stream) -> bool
@@ -1284,10 +1397,13 @@ int main(int argc, char **argv)
         return true;
     };
 
+    // Forward declare configuration_panel so lambdas can reference it
+    ConfigurationPanel* configuration_panel_ptr = nullptr;
+
     auto add_camera_handler = [&](const AddCameraRequest &request) -> AddCameraResult
     {
         AddCameraResult result;
-        
+
         GRID_LOG("ADD CAMERA REQUEST: name='" << request.name << "', url='" << request.rtsp_url << "', via_server=" << request.connect_via_server);
         GRID_LOG("Before add: stream_count=" << stream_count << ", streams.size()=" << streams.size() << ", stream_configs.size()=" << stream_configs.size());
 
@@ -1320,8 +1436,8 @@ int main(int argc, char **argv)
                 GRID_LOG("ADD CAMERA FAILED: Probe failed - " << probe_result.error_message);
                 return result;
             }
-            std::cout << "Probe successful for '" << request.rtsp_url << "': " 
-                      << probe_result.width << "x" << probe_result.height 
+            std::cout << "Probe successful for '" << request.rtsp_url << "': "
+                      << probe_result.width << "x" << probe_result.height
                       << ", audio=" << (probe_result.has_audio ? "yes" : "no") << "\n";
             GRID_LOG("Probe successful: " << probe_result.width << "x" << probe_result.height << ", audio=" << probe_result.has_audio);
         }
@@ -1442,6 +1558,27 @@ int main(int argc, char **argv)
             camera.name = display_name;
             camera.ip = request.rtsp_url;
             camera.via_server = false;
+            
+            // Copy RTSP settings from ConfigurationPanel's temp config (for direct connections)
+            if (configuration_panel_ptr)
+            {
+                const auto& temp_rtsp_config = configuration_panel_ptr->getTempRTSPConfig();
+                camera.rtsp_transport = temp_rtsp_config.rtsp_transport;
+                camera.rtsp_timeout_seconds = temp_rtsp_config.rtsp_timeout_seconds;
+                camera.max_delay_ms = temp_rtsp_config.max_delay_ms;
+                camera.buffer_size_kb = temp_rtsp_config.buffer_size_kb;
+                camera.rtsp_flags_prefer_tcp = temp_rtsp_config.rtsp_flags_prefer_tcp;
+                camera.fflags_nobuffer = temp_rtsp_config.fflags_nobuffer;
+                camera.probesize_kb = temp_rtsp_config.probesize_kb;
+                camera.analyzeduration_ms = temp_rtsp_config.analyzeduration_ms;
+                camera.low_latency = temp_rtsp_config.low_latency;
+                camera.thread_count = temp_rtsp_config.thread_count;
+                camera.hwaccel = temp_rtsp_config.hwaccel;
+            }
+            
+            // Copy frame rate limiting setting
+            camera.limit_frame_rate = request.limit_frame_rate;
+            
             status_message = "Camera added directly.";
             if (!camera.ip.empty())
             {
@@ -1461,14 +1598,14 @@ int main(int argc, char **argv)
         if (!request.connect_via_server && probe_result.success && probe_result.width > 0 && probe_result.height > 0)
         {
             GRID_LOG("Pre-resizing canvas for probed dimensions: " << probe_result.width << "x" << probe_result.height);
-            
+
             // Update reference dimensions if needed
             if (!reference_dimensions_ready || single_w != probe_result.width || single_h != probe_result.height)
             {
                 single_w = probe_result.width;
                 single_h = probe_result.height;
                 reference_dimensions_ready = true;
-                
+
                 if (ensure_canvas_dimensions)
                 {
                     if (!ensure_canvas_dimensions(single_w, single_h, placeholder_dimensions))
@@ -1496,7 +1633,7 @@ int main(int argc, char **argv)
         stream_last_frame_times.push_back(std::chrono::steady_clock::time_point{});
         stream_stall_reported.push_back(false);
         stream_count = static_cast<int>(stream_configs.size());
-        
+
         GRID_LOG("After vector updates: stream_count=" << stream_count << ", streams.size()=" << streams.size());
         GRID_LOG("Attempting to open stream at: " << stream_urls[new_index]);
 
@@ -1505,12 +1642,12 @@ int main(int argc, char **argv)
         if (!opened_immediately)
         {
             release_stream(streams[new_index]);
-            
+
             if (request.connect_via_server)
             {
                 // DO NOT resize canvas for failed streams - just schedule retry
                 // The canvas will be properly sized when the stream successfully opens
-                
+
                 schedule_stream_retry(new_index, kStreamRetryInitialDelay);
                 status_message = "Camera registered. Waiting for stream to become available...";
                 result.success = true;
@@ -1540,7 +1677,7 @@ int main(int argc, char **argv)
         {
             GRID_LOG("ADD CAMERA: Stream opened successfully");
             record_stream_open(new_index);
-            
+
             if (new_index == 0)
             {
                 if (!configure_audio(streams[0]))
@@ -1548,15 +1685,15 @@ int main(int argc, char **argv)
                     std::cerr << "Failed to configure audio for new stream" << "\n";
                 }
             }
-            
+
             // Canvas should already be sized from probe (for direct connections)
             // For via_server connections, we need to resize now
-            if (ensure_canvas_dimensions && streams[new_index].vctx && 
+            if (ensure_canvas_dimensions && streams[new_index].vctx &&
                 streams[new_index].vctx->width > 0 && streams[new_index].vctx->height > 0)
             {
                 int stream_w = streams[new_index].vctx->width;
                 int stream_h = streams[new_index].vctx->height;
-                
+
                 // Check if dimensions differ from what we expect
                 if (!request.connect_via_server && probe_result.success)
                 {
@@ -1583,10 +1720,10 @@ int main(int argc, char **argv)
                 else
                 {
                     // Via server connection - need to resize now
-                    bool need_resize = !reference_dimensions_ready || 
-                                      stream_w != single_w || 
-                                      stream_h != single_h;
-                    
+                    bool need_resize = !reference_dimensions_ready ||
+                                       stream_w != single_w ||
+                                       stream_h != single_h;
+
                     if (need_resize)
                     {
                         GRID_LOG("Resizing canvas for via_server stream: " << stream_w << "x" << stream_h);
@@ -1606,7 +1743,7 @@ int main(int argc, char **argv)
                     }
                 }
             }
-            
+
             start_stream_worker(new_index);
             GRID_LOG("Worker started for stream " << new_index);
         }
@@ -1707,7 +1844,7 @@ int main(int argc, char **argv)
                                            int &width_out, int &height_out) -> bool
     {
         MOTION_FRAME_LOG("fetch_motion_frame_callback called for camera: " << camera_name);
-        
+
         if (!renderer)
         {
             MOTION_FRAME_LOG("ERROR: No renderer available");
@@ -1944,17 +2081,17 @@ int main(int argc, char **argv)
     {
         GRID_LOG("PROBE STREAM: " << url);
         auto probe = probe_rtsp_stream(url);
-        
+
         ProbeStreamResult result;
         result.success = probe.success;
         result.width = probe.width;
         result.height = probe.height;
         result.has_audio = probe.has_audio;
         result.error_message = probe.error_message;
-        
+
         if (result.success)
         {
-            std::cout << "Probe successful: " << result.width << "x" << result.height 
+            std::cout << "Probe successful: " << result.width << "x" << result.height
                       << ", audio=" << (result.has_audio ? "yes" : "no") << "\n";
             GRID_LOG("PROBE SUCCESS: " << result.width << "x" << result.height << ", audio=" << result.has_audio);
         }
@@ -1963,7 +2100,7 @@ int main(int argc, char **argv)
             std::cerr << "Probe failed: " << result.error_message << "\n";
             GRID_LOG("PROBE FAILED: " << result.error_message);
         }
-        
+
         return result;
     };
 
@@ -1972,6 +2109,9 @@ int main(int argc, char **argv)
                                            get_cameras_callback, toggle_motion_callback, fetch_motion_frame_callback,
                                            add_motion_region_callback, remove_motion_region_callback,
                                            clear_motion_regions_callback, get_motion_regions_callback);
+
+    // Set pointer for lambdas to access
+    configuration_panel_ptr = &configuration_panel;
 
     // Connect async worker to configuration panel
     configuration_panel.setAsyncWorker(&async_network_worker);
@@ -1992,7 +2132,7 @@ int main(int argc, char **argv)
             }
             opened = open_stream(i, stream_urls[i], i == 0);
         }
-        
+
         if (opened)
         {
             record_stream_open(i);
@@ -2006,7 +2146,7 @@ int main(int argc, char **argv)
             GRID_LOG("Stream " << i << " failed to open, scheduled for retry");
         }
     }
-    
+
     GRID_LOG("After startup: stream_count=" << stream_count << ", streams.size()=" << streams.size());
 
     if (!reference_dimensions_ready)
@@ -2033,7 +2173,7 @@ int main(int argc, char **argv)
     // --- SDL Video: one big canvas ---
     canvas_w = std::max(single_w, 1) * GRID_COLS;
     canvas_h = std::max(single_h, 1) * GRID_ROWS;
-    
+
     GRID_LOG("Canvas dimensions: " << canvas_w << "x" << canvas_h << " (cell: " << single_w << "x" << single_h << ", placeholder=" << placeholder_dimensions << ")");
 
     win = SDL_CreateWindow(
@@ -2052,6 +2192,17 @@ int main(int argc, char **argv)
     {
         std::cerr << "Failed to create SDL renderer: " << SDL_GetError() << "\n";
         return 1;
+    }
+
+    // Check if hardware acceleration is actually being used
+    SDL_RendererInfo renderer_info;
+    if (SDL_GetRendererInfo(renderer, &renderer_info) == 0)
+    {
+        PERF_LOG("SDL Renderer: " << renderer_info.name);
+        PERF_LOG("  Hardware accelerated: " << ((renderer_info.flags & SDL_RENDERER_ACCELERATED) ? "YES" : "NO"));
+        PERF_LOG("  Software fallback: " << ((renderer_info.flags & SDL_RENDERER_SOFTWARE) ? "YES" : "NO"));
+        PERF_LOG("  VSync: " << ((renderer_info.flags & SDL_RENDERER_PRESENTVSYNC) ? "YES" : "NO"));
+        PERF_LOG("  Max texture size: " << renderer_info.max_texture_width << "x" << renderer_info.max_texture_height);
     }
 
     auto adjust_window_to_canvas = [&](bool allow_maximize)
@@ -2096,11 +2247,11 @@ int main(int argc, char **argv)
 
         int target_canvas_w = desired_single_w * GRID_COLS;
         int target_canvas_h = desired_single_h * GRID_ROWS;
-        
+
         // Don't skip resize if we're not forcing and dimensions match - we still need to
         // ensure the canvas buffer is properly allocated for the current stream count
         if (!force && desired_single_w == single_w && desired_single_h == single_h && texture &&
-            canvas_w == target_canvas_w && canvas_h == target_canvas_h && 
+            canvas_w == target_canvas_w && canvas_h == target_canvas_h &&
             !canvas_buffer.empty() && canvas_linesize[0] > 0)
         {
             // Verify canvas buffer is actually valid before returning early
@@ -2116,7 +2267,7 @@ int main(int argc, char **argv)
         single_h = desired_single_h;
         canvas_w = target_canvas_w;
         canvas_h = target_canvas_h;
-        
+
         GRID_LOG("Resizing canvas to: " << canvas_w << "x" << canvas_h << " (cell: " << single_w << "x" << single_h << ")");
 
         int bytes = av_image_get_buffer_size(AV_PIX_FMT_RGB24, canvas_w, canvas_h, 1);
@@ -2150,7 +2301,7 @@ int main(int argc, char **argv)
         std::fill(canvas_buffer.begin(), canvas_buffer.end(), 0);
         adjust_window_to_canvas(force);
         placeholder_dimensions = false;
-        
+
         GRID_LOG("Canvas resize complete: " << canvas_w << "x" << canvas_h);
         return true;
     };
@@ -2176,6 +2327,30 @@ int main(int argc, char **argv)
     bool reload_all_requested = false;
     int reload_stream_requested = -1;
     int remove_camera_requested = -1;
+    
+    // Setup RTSP configuration callbacks (must be after reload_stream_requested declaration)
+    auto get_rtsp_config = [&](int stream_index) -> CameraConfig& {
+        return stream_configs[stream_index];
+    };
+    
+    auto save_rtsp_config = [&]() {
+        sync_json_from_client_config(client_config_json, client_config);
+        try {
+            save_client_config(client_config_json, config_path);
+        } catch (const std::exception& err) {
+            std::cerr << "Warning: failed to save RTSP config: " << err.what() << "\n";
+        }
+    };
+    
+    auto reload_stream = [&](int stream_index) {
+        if (stream_index >= 0 && stream_index < stream_count) {
+            std::cerr << "Reloading stream " << stream_index << " (" << stream_names[stream_index] << ") with new RTSP config...\n";
+            reload_stream_requested = stream_index;
+        }
+    };
+    
+    configuration_panel.setRTSPConfigCallbacks(get_rtsp_config, save_rtsp_config, reload_stream);
+    
     bool fullscreen_view = false;
     bool window_is_fullscreen = false;
     int fullscreen_stream = -1;
@@ -2307,7 +2482,7 @@ int main(int argc, char **argv)
         threads.push_back(network_thread);
 
         // Add motion frame worker thread info
-        if (auto* motion_worker = configuration_panel.getMotionFrameWorker())
+        if (auto *motion_worker = configuration_panel.getMotionFrameWorker())
         {
             ConfigurationPanel::ThreadInfo motion_thread;
             motion_thread.name = "  Motion Frame Worker";
@@ -2629,6 +2804,14 @@ int main(int argc, char **argv)
                 if (ImGui::MenuItem("Remove Camera", nullptr, false, can_remove_camera))
                 {
                     remove_camera_requested = context_stream_index;
+                    show_context_menu = false;
+                }
+                // More stream settings - only enabled if clicking on a valid camera stream
+                bool can_configure_rtsp = context_stream_index >= 0 &&
+                                          context_stream_index < static_cast<int>(stream_configs.size());
+                if (ImGui::MenuItem("More stream settings", nullptr, false, can_configure_rtsp))
+                {
+                    configuration_panel.requestRTSPConfig(context_stream_index);
                     show_context_menu = false;
                 }
                 // Motion Frames menu item (always enabled)
@@ -2965,6 +3148,7 @@ int main(int argc, char **argv)
         }
 
         configuration_panel.render(show_configuration_panel);
+        configuration_panel.renderRTSPConfigPopup();
 
         // Render unavailable stream status overlays
         {
@@ -2981,33 +3165,32 @@ int main(int argc, char **argv)
                         int cell_h = out_h / GRID_ROWS;
                         int col = i % GRID_COLS;
                         int row = i / GRID_COLS;
-                        
+
                         // Center the status message in the cell
                         ImVec2 cell_center = ImVec2(
                             static_cast<float>(col * cell_w + cell_w / 2),
-                            static_cast<float>(row * cell_h + cell_h / 2)
-                        );
-                        
+                            static_cast<float>(row * cell_h + cell_h / 2));
+
                         std::string status_window_name = "##status" + std::to_string(i);
                         ImGui::SetNextWindowPos(cell_center, ImGuiCond_Always, ImVec2(0.5f, 0.5f));
                         ImGui::SetNextWindowBgAlpha(0.85f);
                         ImGuiWindowFlags status_flags = ImGuiWindowFlags_NoDecoration |
-                                                       ImGuiWindowFlags_AlwaysAutoResize |
-                                                       ImGuiWindowFlags_NoMove |
-                                                       ImGuiWindowFlags_NoSavedSettings |
-                                                       ImGuiWindowFlags_NoInputs;
-                        
+                                                        ImGuiWindowFlags_AlwaysAutoResize |
+                                                        ImGuiWindowFlags_NoMove |
+                                                        ImGuiWindowFlags_NoSavedSettings |
+                                                        ImGuiWindowFlags_NoInputs;
+
                         if (ImGui::Begin(status_window_name.c_str(), nullptr, status_flags))
                         {
                             std::string stream_label = (i < static_cast<int>(stream_names.size()) && !stream_names[i].empty())
-                                                          ? stream_names[i]
-                                                          : ("Stream " + std::to_string(i));
+                                                           ? stream_names[i]
+                                                           : ("Stream " + std::to_string(i));
                             ImGui::TextUnformatted(stream_label.c_str());
                             ImGui::Separator();
                             ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "Not available");
-                            
+
                             // Show retry countdown if scheduled
-                            if (i < static_cast<int>(stream_retry_deadlines.size()) && 
+                            if (i < static_cast<int>(stream_retry_deadlines.size()) &&
                                 stream_retry_deadlines[i] != std::chrono::steady_clock::time_point{})
                             {
                                 auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -3038,8 +3221,8 @@ int main(int argc, char **argv)
                                       audio_device_open;
 
             const bool show_audio_controls = audio_active &&
-                                            (effective_hovered_stream == audio_stream_idx ||
-                                             (frame_now - audio_controls_last_interaction_time) < kOverlayAutoHideDuration);
+                                             (effective_hovered_stream == audio_stream_idx ||
+                                              (frame_now - audio_controls_last_interaction_time) < kOverlayAutoHideDuration);
 
             if (show_audio_controls)
             {
@@ -3170,7 +3353,7 @@ int main(int argc, char **argv)
             int idx = remove_camera_requested;
             std::string camera_name = stream_configs[idx].name;
             bool via_server = stream_configs[idx].via_server;
-            
+
             GRID_LOG("REMOVE CAMERA: idx=" << idx << ", name=" << camera_name << ", stream_count=" << stream_count << ", streams.size()=" << streams.size());
 
             // Release the stream to stop workers cleanly
@@ -3194,10 +3377,10 @@ int main(int argc, char **argv)
             stream_retry_deadlines.erase(stream_retry_deadlines.begin() + idx);
             stream_last_frame_times.erase(stream_last_frame_times.begin() + idx);
             stream_stall_reported.erase(stream_stall_reported.begin() + idx);
-            
+
             // Update stream count before reload
             stream_count = static_cast<int>(stream_configs.size());
-            
+
             GRID_LOG("After removal: stream_count=" << stream_count << ", stream_configs.size()=" << stream_configs.size());
 
             // Persist config immediately so reload uses correct data
@@ -3207,17 +3390,16 @@ int main(int argc, char **argv)
             if (via_server)
             {
                 async_network_worker.enqueueTask([camera_name, endpoint = client_config.server_endpoint]()
-                {
+                                                 {
                     bool success = client_network::remove_camera(endpoint, camera_name);
                     if (!success)
                     {
                         std::cerr << "Failed to remove camera from server: " << camera_name << "\n";
-                    }
-                });
+                    } });
             }
 
             std::cerr << "Camera removed: " << camera_name << " (was index " << idx << ")\n";
-            
+
             // Schedule a full reload to properly rebuild streams deque
             // This is necessary because VideoStreamCtx can't be moved/copied
             reload_all_requested = true;
@@ -3252,21 +3434,21 @@ int main(int argc, char **argv)
             if (reload_all_requested)
             {
                 GRID_LOG("RELOAD ALL: stream_count=" << stream_count << ", streams.size()=" << streams.size());
-                
+
                 std::fill(canvas_buffer.begin(), canvas_buffer.end(), 0);
-                
+
                 // Release all existing streams (this will wait for workers to finish)
                 GRID_LOG("Releasing " << streams.size() << " existing streams...");
                 for (auto &stream : streams)
                 {
                     release_stream(stream);
                 }
-                
+
                 // Reinitialize streams deque to match the new stream_count
                 streams.clear();
                 streams.resize(stream_count);
                 GRID_LOG("Streams deque resized to: " << stream_count);
-                
+
                 bool stream0_reopened = false;
                 std::vector<int> streams_to_restart;
                 streams_to_restart.reserve(stream_count);
@@ -3299,15 +3481,15 @@ int main(int argc, char **argv)
                         stream0_reopened = true;
                     }
                 }
-                
+
                 if (stream_count == 0)
                 {
                     placeholder_dimensions = true;
                     GRID_LOG("No streams remaining, using placeholder dimensions");
                 }
-                
+
                 GRID_LOG("Reload complete: stream_count=" << stream_count << ", streams_to_restart.size()=" << streams_to_restart.size());
-                
+
                 if (need_audio_reset && stream0_reopened && stream_count > 0)
                 {
                     if (!configure_audio(streams[0]))
@@ -3322,10 +3504,21 @@ int main(int argc, char **argv)
             }
             else if (reload_stream_requested >= 0 && reload_stream_requested < stream_count)
             {
-                clear_canvas_slot(reload_stream_requested);
+                int idx = reload_stream_requested;
                 
+                // Stop worker thread and release stream resources before reloading
+                VideoStreamCtx& stream = streams[idx];
+                if (stream.worker.joinable())
+                {
+                    stream.worker_stop.store(true);
+                    stream.worker.join();
+                }
+                release_stream(stream);
+                
+                clear_canvas_slot(idx);
+
                 // Use async_open_stream to avoid blocking the main thread during reconnection
-                async_open_stream(reload_stream_requested, stream_urls[reload_stream_requested], reload_stream_requested == 0);
+                async_open_stream(idx, stream_urls[idx], idx == 0);
             }
 
             if (need_audio_reset && audio_device_open)
@@ -3339,7 +3532,12 @@ int main(int argc, char **argv)
 
         if (texture && !canvas_buffer.empty() && canvas_linesize[0] > 0)
         {
+            auto upload_start = std::chrono::steady_clock::now();
             SDL_UpdateTexture(texture, nullptr, canvas_buffer.data(), canvas_linesize[0]);
+            auto upload_end = std::chrono::steady_clock::now();
+            auto upload_ms = std::chrono::duration_cast<std::chrono::milliseconds>(upload_end - upload_start).count();
+
+            PERF_LOG("Texture upload: " << upload_ms << "ms (canvas: " << canvas_w << "x" << canvas_h << ")" << (upload_ms > 5 ? " (SLOW!)" : ""));
         }
 
         SDL_RenderClear(renderer);

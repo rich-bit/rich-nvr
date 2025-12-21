@@ -37,6 +37,22 @@ struct CameraConfig {
     int motion_decay = 0;
     float motion_arrow_scale = 0.0f;
     int motion_arrow_thickness = 0;
+    
+    // RTSP connection settings (per-camera)
+    std::string rtsp_transport = "tcp";
+    int rtsp_timeout_seconds = 5;
+    int max_delay_ms = 500;
+    int buffer_size_kb = 1024;
+    bool rtsp_flags_prefer_tcp = true;
+    bool fflags_nobuffer = true;
+    int probesize_kb = 1000;
+    int analyzeduration_ms = 1000;
+    bool low_latency = false;
+    int thread_count = 0;
+    std::string hwaccel = "";
+    
+    // Frame rate limiting (enabled by default)
+    bool limit_frame_rate = true;
 };
 
 struct ClientConfig {

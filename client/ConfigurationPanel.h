@@ -14,6 +14,10 @@ namespace client_network {
     struct ServerThreadInfo;
 }
 
+namespace client_config {
+    struct CameraConfig;
+}
+
 struct ConfigurationWindowSettings {
     float width = 720.0f;
     float height = 520.0f;
@@ -44,6 +48,7 @@ struct AddCameraRequest {
     int motion_decay = 0;
     float motion_arrow_scale = 0.0f;
     int motion_arrow_thickness = 0;
+    bool limit_frame_rate = true;
 };
 
 struct AddCameraResult {
@@ -102,6 +107,9 @@ public:
         int motion_arrow_thickness;
     };
     using GetCamerasCallback = std::function<std::vector<CameraInfo>()>;
+    using GetRTSPConfigCallback = std::function<client_config::CameraConfig&(int)>;
+    using SaveRTSPConfigCallback = std::function<void()>;
+    using ReloadStreamCallback = std::function<void(int)>;
 
     ConfigurationPanel(ConfigurationWindowSettings& window_settings,
                        PersistCallback persist_callback,
@@ -120,7 +128,13 @@ public:
 
     void render(bool& open);
     void requestTab(Tab tab);
+    void requestRTSPConfig(int stream_index);
+    void renderRTSPConfigPopup();
+    const client_config::CameraConfig& getTempRTSPConfig() const { return *rtsp_config_temp_; }
     void setThreadInfoCallback(ThreadInfoCallback callback);
+    void setRTSPConfigCallbacks(GetRTSPConfigCallback get_callback, 
+                                SaveRTSPConfigCallback save_callback,
+                                ReloadStreamCallback reload_callback);
     void setAsyncWorker(class AsyncNetworkWorker* worker) { async_worker_ = worker; }
     
     // Public accessor for motion frame worker (for thread info display)
@@ -209,6 +223,7 @@ private:
     int add_camera_motion_decay_;
     float add_camera_motion_arrow_scale_;
     int add_camera_motion_arrow_thickness_;
+    bool add_camera_limit_frame_rate_;
     std::array<char, 64> add_camera_name_;
     std::array<char, 256> add_camera_rtsp_;
     std::array<char, 128> server_endpoint_;
@@ -242,6 +257,15 @@ private:
     
     // Window control
     bool close_after_save_;
+    
+    // RTSP configuration popup state
+    int rtsp_config_stream_index_;
+    bool show_rtsp_config_popup_;
+    std::string rtsp_config_camera_name_;
+    std::unique_ptr<client_config::CameraConfig> rtsp_config_temp_;  // Temporary config for Add Camera mode
+    GetRTSPConfigCallback get_rtsp_config_callback_;
+    SaveRTSPConfigCallback save_rtsp_config_callback_;
+    ReloadStreamCallback reload_stream_callback_;
     
     // Server camera list for motion-frame tab
     std::vector<CameraInfo> server_cameras_;

@@ -161,6 +161,20 @@ ClientConfig load_client_config(const std::filesystem::path &config_path,
                     assign_int("motion_decay", camera.motion_decay);
                     assign_float("motion_arrow_scale", camera.motion_arrow_scale);
                     assign_int("motion_arrow_thickness", camera.motion_arrow_thickness);
+                    
+                    // Load RTSP settings (with defaults)
+                    assign_string("rtsp_transport", camera.rtsp_transport);
+                    assign_int("rtsp_timeout_seconds", camera.rtsp_timeout_seconds);
+                    assign_int("max_delay_ms", camera.max_delay_ms);
+                    assign_int("buffer_size_kb", camera.buffer_size_kb);
+                    assign_bool("rtsp_flags_prefer_tcp", camera.rtsp_flags_prefer_tcp);
+                    assign_bool("fflags_nobuffer", camera.fflags_nobuffer);
+                    assign_int("probesize_kb", camera.probesize_kb);
+                    assign_int("analyzeduration_ms", camera.analyzeduration_ms);
+                    assign_bool("low_latency", camera.low_latency);
+                    assign_int("thread_count", camera.thread_count);
+                    assign_string("hwaccel", camera.hwaccel);
+                    assign_bool("limit_frame_rate", camera.limit_frame_rate);
 
                     if (camera.via_server && camera.original_uri.empty()) {
                         camera.original_uri = camera.ip;
@@ -313,6 +327,44 @@ void sync_json_from_client_config(nlohmann::json &json_doc, const ClientConfig &
             }
             if (camera.motion_arrow_thickness > 0) {
                 options["motion_arrow_thickness"] = camera.motion_arrow_thickness;
+            }
+            
+            // Save RTSP settings (only if non-default)
+            if (camera.rtsp_transport != "tcp") {
+                options["rtsp_transport"] = camera.rtsp_transport;
+            }
+            if (camera.rtsp_timeout_seconds != 5) {
+                options["rtsp_timeout_seconds"] = camera.rtsp_timeout_seconds;
+            }
+            if (camera.max_delay_ms != 500) {
+                options["max_delay_ms"] = camera.max_delay_ms;
+            }
+            if (camera.buffer_size_kb != 1024) {
+                options["buffer_size_kb"] = camera.buffer_size_kb;
+            }
+            if (!camera.rtsp_flags_prefer_tcp) {
+                options["rtsp_flags_prefer_tcp"] = camera.rtsp_flags_prefer_tcp;
+            }
+            if (!camera.fflags_nobuffer) {
+                options["fflags_nobuffer"] = camera.fflags_nobuffer;
+            }
+            if (camera.probesize_kb != 1000) {
+                options["probesize_kb"] = camera.probesize_kb;
+            }
+            if (camera.analyzeduration_ms != 1000) {
+                options["analyzeduration_ms"] = camera.analyzeduration_ms;
+            }
+            if (camera.low_latency) {
+                options["low_latency"] = camera.low_latency;
+            }
+            if (camera.thread_count != 0) {
+                options["thread_count"] = camera.thread_count;
+            }
+            if (!camera.hwaccel.empty()) {
+                options["hwaccel"] = camera.hwaccel;
+            }
+            if (!camera.limit_frame_rate) {
+                options["limit_frame_rate"] = camera.limit_frame_rate;
             }
 
             camera_json["options"] = std::move(options);
