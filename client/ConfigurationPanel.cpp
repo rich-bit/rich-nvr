@@ -204,6 +204,16 @@ void ConfigurationPanel::render(bool &open) {
 
   ImGui::End();
 
+  // After End(), capture mouse input to prevent clicks from passing through
+  ImGuiIO &io = ImGui::GetIO();
+  if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow |
+                             ImGuiHoveredFlags_AllowWhenBlockedByPopup |
+                             ImGuiHoveredFlags_AllowWhenBlockedByActiveItem)) {
+    // Block mouse clicks from reaching the application when hovering any ImGui
+    // window
+    io.WantCaptureMouse = true;
+  }
+
   // Show record on motion warning dialog
   if (show_record_motion_warning_) {
     ImGui::OpenPopup("Record on Motion Warning");

@@ -2460,44 +2460,48 @@ int main(int argc, char **argv) {
             event.key.keysym.sym == SDLK_ESCAPE)
           quit = true;
       } else if (event.type == SDL_MOUSEBUTTONDOWN) {
-        if (event.button.button == SDL_BUTTON_RIGHT) {
-          context_stream_index =
-              stream_index_from_point(event.button.x, event.button.y);
-          show_context_menu = true;
-          context_menu_pos = ImVec2(static_cast<float>(event.button.x),
-                                    static_cast<float>(event.button.y));
-        } else if (event.button.button == SDL_BUTTON_LEFT) {
-          if (show_context_menu && !menu_hovered) {
-            show_context_menu = false;
-          } else if (!show_context_menu && !fullscreen_view) {
-            // Switch audio source on left-click
-            int clicked_stream =
+        ImGuiIO &io = ImGui::GetIO();
+        // Skip mouse handling if ImGui wants to capture the mouse
+        if (!io.WantCaptureMouse) {
+          if (event.button.button == SDL_BUTTON_RIGHT) {
+            context_stream_index =
                 stream_index_from_point(event.button.x, event.button.y);
-            if (clicked_stream >= 0 && clicked_stream < stream_count &&
-                clicked_stream != active_audio_stream.load() &&
-                streams[clicked_stream].fmt_ctx) {
-              int prev_stream = active_audio_stream.load();
-              AUDIO_LOG("Switching audio from stream "
-                        << prev_stream << " to stream " << clicked_stream);
-              active_audio_stream.store(clicked_stream);
-              if (!configure_audio(streams[clicked_stream])) {
-                std::cerr << "Failed to configure audio for clicked stream\n";
-              } else {
-                audio_controls_last_interaction_time =
-                    std::chrono::steady_clock::now();
-                // Show notification
-                std::string to_name =
-                    (clicked_stream < static_cast<int>(stream_names.size()) &&
-                     !stream_names[clicked_stream].empty())
-                        ? stream_names[clicked_stream]
-                        : ("Stream " + std::to_string(clicked_stream));
-                audio_switch_notification = "Audio: " + to_name;
-                audio_switch_notification_time =
-                    std::chrono::steady_clock::now();
+            show_context_menu = true;
+            context_menu_pos = ImVec2(static_cast<float>(event.button.x),
+                                      static_cast<float>(event.button.y));
+          } else if (event.button.button == SDL_BUTTON_LEFT) {
+            if (show_context_menu && !menu_hovered) {
+              show_context_menu = false;
+            } else if (!show_context_menu && !fullscreen_view) {
+              // Switch audio source on left-click
+              int clicked_stream =
+                  stream_index_from_point(event.button.x, event.button.y);
+              if (clicked_stream >= 0 && clicked_stream < stream_count &&
+                  clicked_stream != active_audio_stream.load() &&
+                  streams[clicked_stream].fmt_ctx) {
+                int prev_stream = active_audio_stream.load();
+                AUDIO_LOG("Switching audio from stream "
+                          << prev_stream << " to stream " << clicked_stream);
+                active_audio_stream.store(clicked_stream);
+                if (!configure_audio(streams[clicked_stream])) {
+                  std::cerr << "Failed to configure audio for clicked stream\n";
+                } else {
+                  audio_controls_last_interaction_time =
+                      std::chrono::steady_clock::now();
+                  // Show notification
+                  std::string to_name =
+                      (clicked_stream < static_cast<int>(stream_names.size()) &&
+                       !stream_names[clicked_stream].empty())
+                          ? stream_names[clicked_stream]
+                          : ("Stream " + std::to_string(clicked_stream));
+                  audio_switch_notification = "Audio: " + to_name;
+                  audio_switch_notification_time =
+                      std::chrono::steady_clock::now();
+                }
               }
             }
           }
-        }
+        } // End of !io.WantCaptureMouse check
       } else if (event.type == SDL_MOUSEMOTION) {
         last_pointer_activity_time = std::chrono::steady_clock::now();
         hovered_stream =
