@@ -100,11 +100,24 @@ void SegmentWorker::scanSegmentDir() {
           }
         }
 
-        if (shouldSave) {
+        // Only save if we have a valid previous segment filename
+        if (shouldSave && !savedSegment_.empty()) {
           bool success = false;
           fs::path outputFilename;
           try {
             fs::path src = fs::path(segmentPath_) / savedSegment_;
+
+            // Verify source file exists and is a regular file
+            if (!fs::exists(src)) {
+              std::cerr << "[SegmentWorker] Source file does not exist: "
+                        << src << std::endl;
+              throw std::runtime_error("Source file not found");
+            }
+            if (!fs::is_regular_file(src)) {
+              std::cerr << "[SegmentWorker] Source is not a regular file: "
+                        << src << std::endl;
+              throw std::runtime_error("Source is not a file");
+            }
 
             // Get current time
             auto now = std::chrono::system_clock::now();

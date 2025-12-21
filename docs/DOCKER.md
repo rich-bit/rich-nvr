@@ -8,8 +8,8 @@ From the project root:
 
 ```bash
 docker build -t rich-nvr:latest .
-# Or using docker-compose:
-docker-compose build
+# Or using docker compose:
+docker compose build
 ```
 
 ## First Time Setup
@@ -23,51 +23,51 @@ cd /path/to/rich-nvr
 mkdir -p docker-dist/server/config docker-dist/server/media docker-dist/client
 
 # Build the Docker images
-docker-compose build
+docker compose build
 ```
 
 ## Running the Services
 
 **Run only the server (headless/background recording):**
 ```bash
-docker-compose up -d nvrserver
+docker compose up -d nvrserver
 ```
 
 **Run only the client (GUI viewer):**
 ```bash
-docker-compose up nvrclient
+docker compose up nvrclient
 ```
 
 **Note:** The client requires X11/WSLg for GUI display and runs in foreground mode (no `-d` flag) so you can see the window.
 
 **Run both services together:**
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
 ## Managing Services
 
 **View logs:**
 ```bash
-docker-compose logs -f nvrserver
-docker-compose logs -f nvrclient
+docker compose logs -f nvrserver
+docker compose logs -f nvrclient
 ```
 
 **Stop all services:**
 ```bash
-docker-compose down
+docker compose down
 ```
 
 **Restart a specific service:**
 ```bash
-docker-compose restart nvrserver
-docker-compose restart nvrclient
+docker compose restart nvrserver
+docker compose restart nvrclient
 ```
 
 **Rebuild after code changes:**
 ```bash
-docker-compose build
-docker-compose up -d
+docker compose build
+docker compose up -d
 ```
 
 ## Persistent Data Locations
