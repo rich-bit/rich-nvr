@@ -8,6 +8,7 @@ Client program runs in Linux or Windows, optional server is Linux only.
 - Building: [docs/BUILDING.md](docs/BUILDING.md)
 - Usage: [docs/USAGE.md](docs/USAGE.md)
 - Docker: [docs/DOCKER.md](docs/DOCKER.md)
+- Troubleshooting: [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)
 
 ## Features
 
